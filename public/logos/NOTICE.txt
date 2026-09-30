@@ -1,0 +1,30 @@
+Provider icons are distributed locally from LobeHub's lobe-icons project:
+https://github.com/lobehub/lobe-icons
+
+Source commit: 329f378cbd1a88f45b60cd096b9111ce16f3ea39
+Retrieved: 2026-09-30
+Source directory: packages/static-svg/icons/
+License: MIT (see LICENSE.txt in this directory).
+
+Local file                 Upstream file
+openai.svg                 openai.svg
+anthropic.svg              anthropic.svg
+google.svg                 google-color.svg
+xai.svg                    xai.svg
+deepseek.svg               deepseek-color.svg
+meta.svg                   meta-color.svg
+mistral.svg                mistral-color.svg
+qwen.svg                   qwen-color.svg
+microsoft.svg              microsoft-color.svg
+perplexity.svg             perplexity-color.svg
+cohere.svg                 cohere-color.svg
+black-forest-labs.svg       flux.svg
+runway.svg                 runway.svg
+
+These are upstream SVG assets, not generated monograms. The FLUX mark identifies
+Black Forest Labs' model family. All are served from /logos; no remote images
+are needed at runtime.
+
+The MIT license covers the icon artwork distribution. Provider names and marks
+remain the property of their respective owners; use here identifies providers
+and does not imply endorsement or confer trademark rights.

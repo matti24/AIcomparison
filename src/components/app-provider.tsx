@@ -202,7 +202,7 @@ function AppState({ models, providers, referenceDate, catalogUpdatedAt, children
 
 export function AppProvider({ children, ...props }: CatalogProps & { children: React.ReactNode }) {
   return (
-    <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
+    <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
       <TooltipProvider delayDuration={200}>
         <AppState {...props}>{children}</AppState>
         <Toaster position="bottom-right" closeButton toastOptions={{ className: "!rounded-[10px] !text-[13.5px]" }} />

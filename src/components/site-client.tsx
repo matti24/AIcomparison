@@ -6,13 +6,7 @@ import { useTheme } from "next-themes";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { CONSENT_KEY, track } from "@/lib/analytics";
-
-const noopSubscribe = () => () => {};
-
-/** True only after hydration, without a state update inside an effect. */
-function useHydrated() {
-  return useSyncExternalStore(noopSubscribe, () => true, () => false);
-}
+import { useHydrated } from "@/lib/use-hydrated";
 
 export function ThemeSelect() {
   const { theme, setTheme } = useTheme();

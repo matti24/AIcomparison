@@ -50,6 +50,8 @@ The app works without a database. On first request the reference catalog in [src
 
 Global search / command palette: `Ctrl+K`, `⌘K`, or `/`. It understands intents such as “cheap coding”, “vision”, “1m context”, “open weights”, and comparisons such as “claude vs gemini”. A floating comparison tray (up to four models) persists across pages.
 
+The light/dark switch in the header and mobile navigation has a 220ms sliding thumb and fading sun/moon icons. It works with keyboard input, stays synchronized with the footer's System/Light/Dark selector, persists the theme in browser storage, and respects reduced-motion preferences.
+
 Old URLs keep working: `/companies/*` → `/providers/*`, `/finder` → `/ai-finder`, `/open-source`, `/image-models`, `/video-models` → category pages, and previous single-segment model URLs redirect to `/models/[provider]/[model]`.
 
 ## Data principles

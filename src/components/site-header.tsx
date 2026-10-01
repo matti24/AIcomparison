@@ -3,15 +3,14 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import { useTheme } from "next-themes";
 import { DropdownMenu } from "radix-ui";
 import {
-  ChevronDown, Compass, Calculator, Code2, Heart, Image as ImageIcon, Info, Menu, Moon, Search, Sun, Unlock, Video, Bell, LogIn,
+  ChevronDown, Compass, Calculator, Code2, Heart, Image as ImageIcon, Info, Menu, Search, Unlock, Video, Bell, LogIn,
 } from "lucide-react";
 import { useApp } from "@/components/app-provider";
 import { BrandMark } from "@/components/brand";
+import { ThemeSwitch } from "@/components/theme-switch";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
-import { cn } from "@/lib/utils";
 
 const primaryNav = [
   { href: "/models", label: "Models" },
@@ -30,16 +29,6 @@ export const moreNav = [
   { href: "/models/coding", label: "Coding Models", description: "Models documented for software work", icon: Code2 },
   { href: "/about", label: "About", description: "Who we are and how we work", icon: Info },
 ];
-
-export function ThemeToggle({ className }: { className?: string }) {
-  const { resolvedTheme, setTheme } = useTheme();
-  return (
-    <button type="button" className={cn("icon-btn", className)} onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")} aria-label="Toggle color theme">
-      <Sun className="hidden dark:block" size={17} />
-      <Moon className="dark:hidden" size={17} />
-    </button>
-  );
-}
 
 function isActive(pathname: string, href: string) {
   return pathname === href || pathname.startsWith(`${href}/`);
@@ -102,10 +91,10 @@ export function SiteHeader() {
             </DropdownMenu.Portal>
           </DropdownMenu.Root>
         </nav>
-        <div className="ml-auto flex flex-1 items-center justify-end gap-1">
+        <div className="ml-auto flex min-w-0 flex-1 items-center justify-end gap-1">
           <button type="button" className="nav-search desktop-only" onClick={() => openPalette("search")} aria-label="Search models, providers, and comparisons" aria-keyshortcuts="Control+K Meta+K /">
             <Search size={15} aria-hidden="true" />
-            <span className="flex-1 text-left">Search models…</span>
+            <span className="min-w-0 flex-1 truncate text-left">Search models…</span>
             <kbd aria-hidden="true">⌘K</kbd>
           </button>
           <button type="button" className="icon-btn mobile-only" onClick={() => openPalette("search")} aria-label="Search">
@@ -119,7 +108,7 @@ export function SiteHeader() {
             <Bell size={17} />
             {watchlist.length > 0 && <span className="count-dot" aria-hidden="true">{watchlist.length}</span>}
           </Link>
-          <ThemeToggle className="desktop-grid" />
+          <ThemeSwitch className="desktop-grid" />
           <Link href="/sign-in" className="ml-1 hidden h-8 items-center gap-1.5 whitespace-nowrap rounded-md border px-3 text-[13.5px] font-medium shadow-[var(--shadow-sm)] hover:bg-surface-2 sm:inline-flex">
             <LogIn size={14} aria-hidden="true" /> Sign in
           </Link>
@@ -144,7 +133,7 @@ export function SiteHeader() {
             ))}
           </nav>
           <div className="mt-4 flex items-center justify-between border-t pt-4 text-sm text-muted-foreground">
-            Theme <ThemeToggle />
+            Theme <ThemeSwitch />
           </div>
         </DialogContent>
       </Dialog>

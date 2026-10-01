@@ -1,12 +1,21 @@
 import type { Metadata } from "next";
-import { WatchlistPage } from "@/components/watchlist-page";
+import { WatchlistView } from "@/components/personal-views";
+import { PageHeader } from "@/components/ui-kit";
+import { catalogEvents } from "@/lib/catalog";
+import { getPageCatalog, getPageDate } from "@/lib/server-catalog";
 
 export const metadata: Metadata = {
-  title: "Your AI Model Watchlist",
-  description: "Your personal shortlist of AI models, with recorded release history, pricing changes, and capability updates.",
-  robots: { index: false, follow: false },
+  title: "Watchlist — Model and provider updates",
+  robots: { index: false, follow: true },
+  alternates: { canonical: "/watchlist" },
 };
 
-export default function Page() {
-  return <WatchlistPage />;
+export default async function WatchlistPage() {
+  const events = catalogEvents(await getPageCatalog(), getPageDate());
+  return (
+    <>
+      <PageHeader title="Watchlist" description="Pricing changes, new versions, and deprecations for the models and providers you follow." breadcrumbs={[{ href: "/watchlist", label: "Watchlist" }]} />
+      <div className="container-page py-8"><WatchlistView events={events} /></div>
+    </>
+  );
 }

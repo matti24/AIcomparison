@@ -1,73 +1,129 @@
 "use client";
 
 import { useState } from "react";
-import { ArrowLeft, ArrowRight, BookOpen, Bot, BriefcaseBusiness, ChartColumnIncreasing, Check, Code2, Coins, Database, FileText, Gauge, Globe2, GraduationCap, Image, KeyRound, Layers3, LockKeyhole, MessageCircle, RotateCcw, ShieldCheck, Sparkles, Video, Zap } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, RotateCcw } from "lucide-react";
 import { useApp } from "@/components/app-provider";
 import { ModelCard } from "@/components/model-card";
-import { PageHeading } from "@/components/page-heading";
-import { EmptyState } from "@/components/site-shell";
+import { EmptyState } from "@/components/ui-kit";
 import { Button } from "@/components/ui/button";
-import { priorityLabels, recommendModels, useCaseLabels, type Priority } from "@/lib/catalog";
-import type { UseCase } from "@/lib/types";
-import { cn } from "@/lib/utils";
+import {
+  FINDER_API, FINDER_BUDGET, FINDER_PRIORITIES, FINDER_TASKS, recommendModels,
+  type FinderAnswers, type FinderApi, type FinderBudget, type FinderPriority, type FinderTask,
+} from "@/lib/catalog";
+import { track } from "@/lib/analytics";
 
-const useCases: { value: UseCase; icon: typeof Code2; description: string }[] = [
-  { value: "coding", icon: Code2, description: "Ship, debug, and build things" },
-  { value: "writing", icon: FileText, description: "Find the words that work" },
-  { value: "research", icon: BookOpen, description: "Go deeper, connect the dots" },
-  { value: "school", icon: GraduationCap, description: "Understand something new" },
-  { value: "business", icon: BriefcaseBusiness, description: "A smarter working day" },
-  { value: "data-analysis", icon: ChartColumnIncreasing, description: "Turn numbers into insight" },
-  { value: "image-creation", icon: Image, description: "Bring an idea into focus" },
-  { value: "video-creation", icon: Video, description: "Make your next moving story" },
-  { value: "customer-support", icon: MessageCircle, description: "Give helpful answers, at scale" },
-  { value: "agents", icon: Bot, description: "Make your workflows work" },
-  { value: "general", icon: Sparkles, description: "A little help with everything" },
-];
+const STEPS = [
+  { key: "task", title: "What are you doing?", options: FINDER_TASKS },
+  { key: "priority", title: "What matters most?", options: FINDER_PRIORITIES },
+  { key: "api", title: "Do you need an API?", options: FINDER_API },
+  { key: "budget", title: "What's your budget?", options: FINDER_BUDGET },
+] as const;
 
-const priorities: { value: Priority; icon: typeof Code2; description: string }[] = [
-  { value: "performance", icon: Gauge, description: "A strong fit for the task, not a universal score" },
-  { value: "cheapest", icon: Coins, description: "The lowest documented API input price" },
-  { value: "fastest", icon: Zap, description: "Speed documented by a reliable source" },
-  { value: "context", icon: Database, description: "More room for long documents and inputs" },
-  { value: "privacy", icon: LockKeyhole, description: "Run the model in your own environment" },
-  { value: "open", icon: Globe2, description: "An open-source license, not just open weights" },
-  { value: "api", icon: KeyRound, description: "A model you can build into your app" },
-  { value: "multimodal", icon: Layers3, description: "Go beyond text with images, audio, or video" },
-];
+const BUDGET_HELP: Record<FinderBudget, string> = {
+  free: "Free access or downloadable weights",
+  low: "Up to $1 per 1M input tokens",
+  medium: "Up to $5 per 1M input tokens",
+  premium: "Any price",
+  any: "Don't filter by price",
+};
 
-export function AIFinder() {
-  const { catalog } = useApp();
+export function AiFinder() {
+  const { models } = useApp();
   const [step, setStep] = useState(0);
-  const [useCase, setUseCase] = useState<UseCase | null>(null);
-  const [priority, setPriority] = useState<Priority | null>(null);
-  const matches = useCase && priority ? recommendModels(catalog, useCase, priority) : [];
+  const [answers, setAnswers] = useState<Partial<FinderAnswers>>({});
+  const done = step >= STEPS.length;
+  const complete = answers.task && answers.priority && answers.api && answers.budget;
+  const result = done && complete ? recommendModels(models, answers as FinderAnswers) : null;
 
-  function reset() { setStep(0); setUseCase(null); setPriority(null); }
+  function choose(key: (typeof STEPS)[number]["key"], value: string) {
+    const next = { ...answers, [key]: value };
+    setAnswers(next);
+    if (step === STEPS.length - 1) {
+      track("finder_completed", { task: next.task ?? null, priority: next.priority ?? null, api: next.api ?? null, budget: next.budget ?? null });
+    }
+    setStep((current) => current + 1);
+  }
 
-  return (
-    <div className="content-width pb-14">
-      <PageHeading eyebrow="Your personal AI compass" title="The right AI starts with you." description="No one model is best at everything. Tell us a little about what you need, and we'll help you find a few good fits." />
-      <div className={cn("finder-workspace", step === 2 && "finder-results")}>
-        <ol className="finder-progress" aria-label="Finder progress">{["Your use case", "Your priorities", "Your matches"].map((label, index) => <li key={label} className={cn(step >= index && "active")} aria-current={step === index ? "step" : undefined}><span>{step > index ? <Check size={12} /> : `0${index + 1}`}</span>{label}{index < 2 && <div className="finder-progress-line" />}</li>)}</ol>
-        {step < 2 ? (
-          <section className="finder-question-panel">
-            <div className="finder-question-heading"><span className="eyebrow">Question {step + 1} of 2</span><h2>{step === 0 ? "What do you mainly need AI for?" : "What matters most to you?"}</h2><p>{step === 0 ? "Start with the thing you spend your time on. Pick one for now." : `We'll look for models suited to ${useCase ? useCaseLabels[useCase].toLowerCase() : "your task"}, with this priority in mind.`}</p></div>
-            <div className={cn("finder-options", step === 1 && "priority-options")} role="group" aria-label={step === 0 ? "Choose a use case" : "Choose your priority"}>
-              {step === 0 ? useCases.map(({ value, icon: Icon, description }) => <button key={value} className={cn("finder-option", useCase === value && "selected")} aria-pressed={useCase === value} onClick={() => setUseCase(value)}><span className="finder-option-icon"><Icon size={20} strokeWidth={1.6} /></span><span><strong>{useCaseLabels[value]}</strong><small>{description}</small></span>{useCase === value && <Check size={14} className="finder-option-check" />}</button>) :
-                priorities.map(({ value, icon: Icon, description }) => <button key={value} className={cn("finder-option", priority === value && "selected")} aria-pressed={priority === value} onClick={() => setPriority(value)}><span className="finder-option-icon"><Icon size={20} strokeWidth={1.6} /></span><span><strong>{priorityLabels[value]}</strong><small>{description}</small></span>{priority === value && <Check size={14} className="finder-option-check" />}</button>)}
-            </div>
-            <div className="finder-question-footer">{step > 0 ? <button className="text-link" onClick={() => setStep(0)}><ArrowLeft size={13} />Back to use case</button> : <p><ShieldCheck size={12} />No sign-up. No information leaves your browser.</p>}<Button size="lg" disabled={step === 0 ? useCase === null : priority === null} onClick={() => setStep(step + 1)}>{step === 0 ? "Next, your priorities" : "Find my matches"}<ArrowRight size={14} /></Button></div>
-          </section>
+  if (done && result) {
+    return (
+      <div>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-xl">{result.results.length ? `${result.results.length} models match your answers` : "No exact matches"}</h2>
+            <p className="mt-1 text-[14px] text-muted-foreground">
+              {FINDER_TASKS[answers.task as FinderTask]} · {FINDER_PRIORITIES[answers.priority as FinderPriority]} · API: {FINDER_API[answers.api as FinderApi]} · Budget: {FINDER_BUDGET[answers.budget as FinderBudget]}
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => setStep(STEPS.length - 1)}><ArrowLeft size={15} /> Back</Button>
+            <Button variant="outline" onClick={() => { setAnswers({}); setStep(0); }}><RotateCcw size={15} /> Start over</Button>
+          </div>
+        </div>
+        {result.notes.map((note) => <p key={note} className="mt-4 rounded-lg border bg-surface px-4 py-3 text-[13.5px] text-muted-foreground">{note}</p>)}
+        {result.results.length ? (
+          <div className="model-grid mt-6">
+            {result.results.map(({ model, reasons }) => (
+              <ModelCard
+                key={model.slug}
+                model={model}
+                reason={
+                  <div>
+                    <p className="text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">Why it matches</p>
+                    <ul className="mt-1.5 grid gap-1">
+                      {reasons.map((reason) => <li key={reason} className="flex gap-1.5 text-[13.5px]"><Check size={14} className="mt-0.5 shrink-0 text-positive" aria-hidden="true" />{reason}</li>)}
+                    </ul>
+                  </div>
+                }
+              />
+            ))}
+          </div>
         ) : (
-          <>
-            <div className="finder-results-heading"><div><span className="eyebrow">A shortlist, with reasons</span><h2>{matches.length ? "A few good fits. Here's why." : "No documented match. No guesswork."}</h2><p>For <strong>{useCase ? useCaseLabels[useCase] : ""}</strong>, prioritizing <strong>{priority ? priorityLabels[priority].toLowerCase() : ""}</strong>.</p></div><Button variant="outline" onClick={reset}><RotateCcw size={13} />Start again</Button></div>
-            {matches.length ? <div className="finder-match-grid">{matches.map(({ model, reasons }) => <div className="finder-match" key={model.id}><div className="match-label"><Check size={11} />A documented match</div><ModelCard model={model} /><div className="match-reasons"><h3>Why this could work for you</h3><ul>{reasons.map((reason) => <li key={reason}><Check size={12} /><span>{reason}</span></li>)}</ul></div></div>)}</div> :
-              <EmptyState title="Let's try a different direction." description={priority === "fastest" ? "We don't have source-verified speed data for models in this use case. Rather than guess, try API access, pricing, or context size." : "No model in the current catalog has documented support for this exact combination. Try another priority or use case."}><Button onClick={() => setStep(1)}><ArrowLeft size={14} />Change my priority</Button></EmptyState>}
-            <div className="notice mt-7"><ShieldCheck size={16} /><p>These are rule-based matches from documented capabilities and editorial use-case tags, not an objective &ldquo;best AI&rdquo; ranking. Prices are sorted by input rate, not total workload cost. Verify your own requirements using a side-by-side comparison.</p></div>
-          </>
+          <div className="mt-6">
+            <EmptyState title="Nothing matches all of your answers." description="Try a different budget or priority — some combinations (for example free + realtime voice) are rare.">
+              <Button variant="outline" onClick={() => setStep(1)}>Change priority</Button>
+              <Button variant="outline" onClick={() => setStep(3)}>Change budget</Button>
+            </EmptyState>
+          </div>
         )}
+        <p className="mt-6 text-xs text-muted-foreground">Matches are rule-based filters over documented specifications. They are not claims that any model is objectively the best. Always test with your own prompts.</p>
       </div>
+    );
+  }
+
+  const current = STEPS[step];
+  return (
+    <div>
+      <ol className="mb-6 flex gap-2" aria-label="Progress">
+        {STEPS.map((entry, index) => (
+          <li key={entry.key} className="h-1.5 flex-1 rounded-full" style={{ background: index <= step ? "var(--foreground)" : "var(--border)" }} aria-current={index === step ? "step" : undefined}>
+            <span className="sr-only">Step {index + 1}: {entry.title}{index < step ? " (done)" : ""}</span>
+          </li>
+        ))}
+      </ol>
+      <p className="text-[13px] font-medium text-muted-foreground">Step {step + 1} of {STEPS.length}</p>
+      <h2 className="mt-1 text-2xl" id="finder-question">{current.title}</h2>
+      <div role="radiogroup" aria-labelledby="finder-question" className="mt-5 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+        {Object.entries(current.options).map(([value, label]) => {
+          const selected = answers[current.key] === value;
+          return (
+            <button
+              key={value}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              onClick={() => choose(current.key, value)}
+              className="flex min-h-14 items-center justify-between gap-3 rounded-lg border bg-card px-4 py-3 text-left transition-colors hover:border-foreground aria-checked:border-foreground aria-checked:shadow-[0_0_0_1px_var(--foreground)]"
+            >
+              <span>
+                <span className="block font-medium">{label}</span>
+                {current.key === "budget" && <span className="text-[12.5px] text-muted-foreground">{BUDGET_HELP[value as FinderBudget]}</span>}
+              </span>
+              <ArrowRight size={15} className="shrink-0 text-muted-foreground" aria-hidden="true" />
+            </button>
+          );
+        })}
+      </div>
+      {step > 0 && <Button variant="ghost" className="mt-5" onClick={() => setStep(step - 1)}><ArrowLeft size={15} /> Back</Button>}
     </div>
   );
 }

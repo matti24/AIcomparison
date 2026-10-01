@@ -2,19 +2,20 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { z } from "zod";
 import { toast } from "sonner";
-import { ArrowRight, BookOpen, Building2, Check, Code2, Database, Download, ExternalLink, FileJson, Info, LoaderCircle, LockKeyhole, LogOut, Plus, RotateCcw, Save, Search, ShieldCheck, Sparkles, X } from "lucide-react";
+import {
+  Archive, ArrowRight, BarChart3, Building2, Check, Download, ExternalLink, FileJson, Info, Link2, ListChecks, LoaderCircle, LockKeyhole,
+  LogOut, Megaphone, Plus, RotateCcw, Save, Search, ShieldCheck, Trash2, TriangleAlert, X, Boxes,
+} from "lucide-react";
 import { ProviderLogo } from "@/components/brand";
-import { PageHeading } from "@/components/page-heading";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { newModelTemplate, newProviderTemplate } from "@/lib/admin-templates";
+import { newLinkTemplate, newModelTemplate, newProviderTemplate, newSponsoredTemplate } from "@/lib/admin-templates";
 import { catalogSchema } from "@/lib/catalog-schema";
-import { formatDate, getProvider } from "@/lib/catalog";
-import type { AIModel, Catalog, Provider } from "@/lib/types";
+import { formatDate, getProvider, modelPath, statusLabels } from "@/lib/catalog";
+import type { AIModel, Catalog, ChangelogEntry, OutboundLink, Provider, SponsoredPlacement } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const responseSchema = z.object({
@@ -26,7 +27,7 @@ const responseSchema = z.object({
   issues: z.array(z.string()).optional(),
 });
 
-const sections = [
+const modelSections = [
   { value: "record", label: "Full record" },
   { value: "pricing", label: "Pricing" },
   { value: "capabilities", label: "Capabilities" },
@@ -34,8 +35,12 @@ const sections = [
   { value: "releases", label: "Releases" },
   { value: "editorial", label: "Editorial" },
 ] as const;
-type EditorSection = (typeof sections)[number]["value"];
-type Editing = { kind: "model"; record: AIModel; isNew: boolean } | { kind: "provider"; record: Provider; isNew: boolean };
+type ModelSection = (typeof modelSections)[number]["value"];
+
+type Collection = "models" | "providers" | "links" | "sponsored" | "changelog";
+type View = "dashboard" | Collection;
+type AnyRecord = AIModel | Provider | OutboundLink | SponsoredPlacement | ChangelogEntry;
+interface Editing { collection: Collection; record: AnyRecord; isNew: boolean; section: ModelSection }
 
 async function requestAdmin(path: string, init?: RequestInit) {
   const response = await fetch(path, { ...init, cache: "no-store", headers: { "Content-Type": "application/json", ...init?.headers } });
@@ -43,6 +48,95 @@ async function requestAdmin(path: string, init?: RequestInit) {
   const result = responseSchema.safeParse(body);
   if (!result.success) throw new Error("The server returned an unexpected response. Your changes have not been published.");
   return { response, data: result.data };
+}
+
+interface Analytics {
+  days: number;
+  totals: Record<string, number>;
+  daily: { date: string; count: number }[];
+  topModels: { key: string; count: number }[];
+  mostCompared: { key: string; count: number }[];
+  topPages: { key: string; count: number }[];
+  searches: { key: string; count: number }[];
+  noResultSearches: { key: string; count: number }[];
+  outbound: { key: string; count: number }[];
+}
+
+function Dashboard({ catalog }: { catalog: Catalog }) {
+  const [days, setDays] = useState(30);
+  const [data, setData] = useState<Analytics | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let active = true;
+    fetch(`/api/admin/analytics?days=${days}`, { cache: "no-store" })
+      .then(async (response) => {
+        const body = await response.json();
+        if (!response.ok) throw new Error(body.error ?? "Analytics unavailable.");
+        if (active) { setData(body as Analytics); setError(null); }
+      })
+      .catch((cause) => active && setError(cause instanceof Error ? cause.message : "Analytics unavailable."));
+    return () => { active = false; };
+  }, [days]);
+
+  const name = (slug: string) => catalog.models.find((model) => model.slug === slug)?.name ?? slug;
+  const tiles: [string, string][] = data ? [
+    ["Visitors", "visitors"], ["Page views", "pageViews"], ["Model page views", "modelViews"], ["Comparisons viewed", "comparisons"],
+    ["Outbound clicks", "outboundClicks"], ["Affiliate clicks", "affiliateClicks"], ["Calculator uses", "calculatorUses"], ["Newsletter signups", "newsletterSignups"],
+    ["Subscribers", "subscribers"], ["Pro waitlist", "proWaitlist"], ["API waitlist", "apiWaitlist"], ["Pro clicks", "proClicks"],
+  ] : [];
+  const maxDaily = Math.max(1, ...(data?.daily.map((entry) => entry.count) ?? [1]));
+
+  const list = (title: string, rows: { key: string; count: number }[], format: (key: string) => string = (key) => key) => (
+    <div className="panel p-4">
+      <h3 className="text-[14px]">{title}</h3>
+      {rows.length ? (
+        <ol className="mt-2 grid gap-1 text-[13.5px]">
+          {rows.map((row) => <li key={row.key} className="flex justify-between gap-3"><span className="truncate">{format(row.key)}</span><span className="tabular text-muted-foreground">{row.count}</span></li>)}
+        </ol>
+      ) : <p className="mt-2 text-[13px] text-muted-foreground">No data yet.</p>}
+    </div>
+  );
+
+  return (
+    <div>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+        <p className="text-[13.5px] text-muted-foreground">Consented, anonymous product analytics plus cookie-free outbound click counts.</p>
+        <div className="flex items-center gap-2">
+          <select className="field !h-8 !w-auto !text-[13px]" value={days} onChange={(event) => setDays(Number(event.target.value))} aria-label="Period">
+            <option value={7}>Last 7 days</option><option value={30}>Last 30 days</option><option value={90}>Last 90 days</option><option value={365}>Last year</option>
+          </select>
+          <Button asChild variant="outline" size="sm"><a href="/api/admin/subscribers"><Download size={13} /> Subscribers CSV</a></Button>
+        </div>
+      </div>
+      {error && <p role="alert" className="rounded-md border p-3 text-sm text-danger">{error}</p>}
+      {!data && !error && <div className="grid grid-cols-2 gap-3 md:grid-cols-4">{Array.from({ length: 8 }, (_, index) => <div key={index} className="skeleton h-20" />)}</div>}
+      {data && (
+        <>
+          <dl className="grid grid-cols-2 gap-3 md:grid-cols-4 lg:grid-cols-6">
+            {tiles.map(([label, key]) => (
+              <div key={key} className="panel p-4"><dt className="stat-label">{label}</dt><dd className="mt-1 text-2xl font-semibold tabular">{(data.totals[key] ?? 0).toLocaleString("en-US")}</dd></div>
+            ))}
+          </dl>
+          <div className="panel mt-4 p-4">
+            <h3 className="text-[14px]">Daily page views</h3>
+            {data.daily.length ? (
+              <div className="mt-3 flex h-28 items-end gap-1" role="img" aria-label="Daily page views chart">
+                {data.daily.map((entry) => <div key={entry.date} title={`${entry.date}: ${entry.count}`} className="flex-1 rounded-t bg-foreground/70" style={{ height: `${(entry.count / maxDaily) * 100}%` }} />)}
+              </div>
+            ) : <p className="mt-2 text-[13px] text-muted-foreground">No page views recorded yet.</p>}
+          </div>
+          <div className="mt-4 grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+            {list("Most viewed models", data.topModels, name)}
+            {list("Most compared models", data.mostCompared, name)}
+            {list("Top pages", data.topPages)}
+            {list("Popular searches", data.searches)}
+            {list("Searches with no results", data.noResultSearches)}
+            {list("Outbound clicks", data.outbound)}
+          </div>
+        </>
+      )}
+    </div>
+  );
 }
 
 export function AdminStudio() {
@@ -56,15 +150,14 @@ export function AdminStudio() {
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [baseline, setBaseline] = useState("");
   const [storage, setStorage] = useState<"local" | "supabase">("local");
-  const [view, setView] = useState<"models" | "providers">("models");
+  const [view, setView] = useState<View>("dashboard");
   const [query, setQuery] = useState("");
   const [editing, setEditing] = useState<Editing | null>(null);
-  const [section, setSection] = useState<EditorSection>("record");
   const [text, setText] = useState("");
   const [issues, setIssues] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [confirmReload, setConfirmReload] = useState(false);
-  const dirty = catalog !== null && JSON.stringify(catalog) !== baseline;
+  const dirty = useMemo(() => catalog !== null && JSON.stringify(catalog) !== baseline, [catalog, baseline]);
 
   useEffect(() => {
     let active = true;
@@ -121,7 +214,7 @@ export function AdminStudio() {
       setAuthenticated(true);
       setPassword("");
       if (!catalog) await loadCatalog();
-      toast.success("Welcome to the catalog studio");
+      toast.success("Signed in to the catalog studio");
     } catch (cause) {
       console.error("Admin sign-in failed:", cause);
       setError(cause instanceof Error ? cause.message : "Unable to sign in.");
@@ -139,16 +232,14 @@ export function AdminStudio() {
       setBaseline("");
       toast.success("Signed out");
     } catch (cause) {
-      console.error("Admin sign-out failed:", cause);
       toast.error(cause instanceof Error ? cause.message : "Unable to sign out.");
     } finally { setBusy(false); }
   }
 
-  function openEditor(value: Editing, nextSection: EditorSection = "record") {
-    setEditing(value);
-    setSection(nextSection);
+  function openEditor(collection: Collection, record: AnyRecord, isNew: boolean, section: ModelSection = "record") {
+    setEditing({ collection, record, isNew, section });
     setIssues([]);
-    setText(JSON.stringify(value.kind === "model" && nextSection !== "record" ? value.record[nextSection] : value.record, null, 2));
+    setText(JSON.stringify(collection === "models" && section !== "record" ? (record as AIModel)[section] : record, null, 2));
   }
 
   function exportCatalog() {
@@ -162,29 +253,55 @@ export function AdminStudio() {
     URL.revokeObjectURL(url);
   }
 
+  function commit(candidate: Catalog, message: string) {
+    const result = catalogSchema.safeParse(candidate);
+    if (!result.success) {
+      setIssues(result.error.issues.slice(0, 40).map((issue) => `${issue.path.join(".")}: ${issue.message}`));
+      return false;
+    }
+    setCatalog(result.data);
+    toast.success(message, { description: "Publish the catalog to make it visible to visitors." });
+    return true;
+  }
+
+  function replaceRecord(base: Catalog, collection: Collection, record: AnyRecord, previousId: string | null): Catalog {
+    const list = base[collection] as AnyRecord[];
+    const next = previousId === null ? [...list, record] : list.map((entry) => (entry.id === previousId ? record : entry));
+    return { ...base, [collection]: next };
+  }
+
   function applyEdit() {
     if (!catalog || !editing) return;
     let parsed: unknown;
     try { parsed = JSON.parse(text); } catch (cause) {
       setIssues([cause instanceof Error ? cause.message : "Invalid JSON."]); return;
     }
+    const value = editing.collection === "models" && editing.section !== "record" ? { ...editing.record, [editing.section]: parsed } : parsed;
+    if (typeof value !== "object" || value === null || Array.isArray(value)) { setIssues(["A record must be a JSON object."]); return; }
     const now = new Date().toISOString();
-    const value = section === "record" || editing.kind === "provider" ? parsed : { ...editing.record, [section]: parsed };
-    if (typeof value !== "object" || value === null || Array.isArray(value)) {
-      setIssues(["A record must be a JSON object."]); return;
+    const record = ("updatedAt" in value ? { ...value, updatedAt: now } : value) as AnyRecord;
+    if (commit(replaceRecord(catalog, editing.collection, record, editing.isNew ? null : editing.record.id), "Change added to your draft")) {
+      setEditing(null);
+      setIssues([]);
     }
-    const record = { ...value, updatedAt: now };
-    const candidate = editing.kind === "model"
-      ? { ...catalog, models: editing.isNew ? [...catalog.models, record] : catalog.models.map((model) => model.id === editing.record.id ? record : model) }
-      : { ...catalog, providers: editing.isNew ? [...catalog.providers, record] : catalog.providers.map((provider) => provider.id === editing.record.id ? record : provider) };
-    const result = catalogSchema.safeParse(candidate);
-    if (!result.success) {
-      setIssues(result.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`)); return;
-    }
-    setCatalog(result.data);
-    setEditing(null);
-    setIssues([]);
-    toast.success("Change added to your draft", { description: "Publish the catalog to make it visible to visitors." });
+  }
+
+  function setStatus(model: AIModel, status: AIModel["status"]) {
+    if (!catalog) return;
+    const now = new Date().toISOString();
+    const today = now.slice(0, 10);
+    const event = status === "deprecated" || status === "retired" ? [{
+      id: `${model.id}-${status}-${now.replace(/\D/g, "").slice(0, 14)}`, date: today, type: status === "retired" ? "retirement" as const : "deprecation" as const,
+      title: `${model.name} ${status === "retired" ? "retired" : "deprecated"}`, description: "Status changed in the catalog studio. Replace this event's source with the provider's official notice.",
+      source: { label: `${model.name} official documentation`, url: model.apiDocs ?? model.website, checkedAt: today },
+    }] : [];
+    commit(replaceRecord(catalog, "models", { ...model, status, updatedAt: now, releases: [...event, ...model.releases] }, model.id), `${model.name} marked ${statusLabels[status].toLowerCase()}`);
+  }
+
+  function remove(collection: Collection, id: string) {
+    if (!catalog) return;
+    if (collection === "models" || collection === "providers") { toast.error("Retire models instead of deleting them so historical pages keep working."); return; }
+    commit({ ...catalog, [collection]: (catalog[collection] as AnyRecord[]).filter((entry) => entry.id !== id) }, "Removed from your draft");
   }
 
   async function publish() {
@@ -198,7 +315,7 @@ export function AdminStudio() {
       setCatalog(data.catalog);
       setBaseline(JSON.stringify(data.catalog));
       router.refresh();
-      toast.success("Catalog published", { description: "Your changes are persisted. New page requests will use the updated catalog." });
+      toast.success("Catalog published", { description: "Changes are live for new page requests." });
     } catch (cause) {
       console.error("Catalog publication failed:", cause);
       setError(cause instanceof Error ? cause.message : "Your catalog was not published.");
@@ -212,66 +329,234 @@ export function AdminStudio() {
       setConfirmReload(false);
       toast.success("Published catalog reloaded");
     } catch (cause) {
-      console.error("Catalog reload failed:", cause);
       setError(cause instanceof Error ? cause.message : "Unable to reload the catalog.");
     } finally { setBusy(false); }
   }
 
-  if (loading) return <div className="content-width py-20"><div className="mx-auto flex items-center justify-center gap-3 text-sm text-muted-foreground"><LoaderCircle size={20} className="animate-spin" />Opening the catalog studio...</div></div>;
+  if (loading) return <div className="container-page py-20"><p className="flex items-center justify-center gap-3 text-sm text-muted-foreground"><LoaderCircle size={20} className="animate-spin" />Opening the catalog studio…</p></div>;
 
   if (!authenticated) return (
-    <div className="content-width py-14">
-      <div className="admin-login">
-        <span className="admin-login-icon"><LockKeyhole size={28} strokeWidth={1.5} /></span>
-        <span className="eyebrow">For the people behind the details</span><h1>The catalog studio.</h1><p>Keep good information current. Manage providers, model versions, prices, capabilities, and source-backed releases.</p>
-        {!configured && <div className="notice mt-5 text-left"><Info size={15} /><p>Admin access is not configured. Run <code>npm run setup:local</code> to generate local credentials, or set <code>ADMIN_PASSWORD</code> and <code>ADMIN_SESSION_SECRET</code> on your server, then restart.</p></div>}
-        <form onSubmit={signIn} className="mt-7 text-left">
-          <label htmlFor="admin-password" className="mb-2 block text-xs font-medium">Admin password</label>
-          <Input id="admin-password" type="password" required minLength={1} maxLength={512} autoComplete="current-password" placeholder="Your catalog, your key" value={password} onChange={(event) => setPassword(event.target.value)} className="h-11" disabled={!configured || authBusy} />
-          {error && <p role="alert" className="mt-3 text-xs leading-6 whitespace-pre-wrap text-destructive">{error}</p>}
-          <Button type="submit" size="lg" className="mt-5 w-full" disabled={!configured || authBusy || !password}>{authBusy ? <LoaderCircle size={15} className="animate-spin" /> : <ArrowRight size={15} />}Open the studio</Button>
+    <div className="container-page grid min-h-[70vh] place-items-center py-14">
+      <div className="panel w-full max-w-[420px] p-8">
+        <span className="grid size-11 place-items-center rounded-full border"><LockKeyhole size={20} /></span>
+        <h1 className="mt-5 text-2xl">Catalog studio</h1>
+        <p className="mt-2 text-[14px] text-muted-foreground">Manage models, providers, pricing, benchmarks, releases, links, and sponsored placements.</p>
+        {!configured && <p className="mt-4 rounded-md border bg-surface p-3 text-[13px]">Admin access is not configured. Run <code>npm run setup:local</code>, or set <code>ADMIN_PASSWORD</code> and <code>ADMIN_SESSION_SECRET</code> on the server and restart.</p>}
+        <form onSubmit={signIn} className="mt-6">
+          <label htmlFor="admin-password" className="mb-1.5 block text-[13px] font-medium">Admin password</label>
+          <input id="admin-password" type="password" required maxLength={512} autoComplete="current-password" className="field" value={password} onChange={(event) => setPassword(event.target.value)} disabled={!configured || authBusy} />
+          {error && <p role="alert" className="mt-3 text-[13px] whitespace-pre-wrap text-danger">{error}</p>}
+          <Button type="submit" className="mt-4 h-10 w-full" disabled={!configured || authBusy || !password}>{authBusy ? <LoaderCircle size={15} className="animate-spin" /> : <ArrowRight size={15} />}Sign in</Button>
         </form>
-        <p className="admin-login-note"><ShieldCheck size={12} />Protected with an HttpOnly, signed admin session.</p>
-        <p className="mt-4 text-[10px] leading-5 text-muted-foreground">For local development, the generated password is the <code>ADMIN_PASSWORD</code> value in your private <code>.env.local</code> file.</p>
+        <p className="mt-4 flex items-center gap-1.5 text-xs text-muted-foreground"><ShieldCheck size={13} />Signed, HttpOnly, SameSite=Strict session.</p>
       </div>
     </div>
   );
 
-  if (!catalog) return <div className="content-width py-16"><div className="notice"><Info size={16} /><p role="alert">{error ?? "The catalog has not loaded. Reload the page to try again."}</p></div><Button onClick={() => window.location.reload()} className="mt-5">Reload studio</Button></div>;
-  const records = view === "models" ? catalog.models.filter((model) => `${model.name} ${model.version} ${getProvider(catalog, model.providerId).name}`.toLowerCase().includes(query.toLowerCase())) : catalog.providers.filter((provider) => provider.name.toLowerCase().includes(query.toLowerCase()));
+  if (!catalog) return <div className="container-page py-16"><p role="alert" className="text-danger">{error ?? "The catalog has not loaded."}</p><Button onClick={() => window.location.reload()} className="mt-5">Reload studio</Button></div>;
+
+  const q = query.toLowerCase();
+  const providerName = (id: string) => catalog.providers.find((provider) => provider.id === id)?.name ?? id;
+  const tabs: { value: View; label: string; icon: React.ElementType; count?: number }[] = [
+    { value: "dashboard", label: "Analytics", icon: BarChart3 },
+    { value: "models", label: "Models", icon: Boxes, count: catalog.models.length },
+    { value: "providers", label: "Providers", icon: Building2, count: catalog.providers.length },
+    { value: "links", label: "Affiliate links", icon: Link2, count: catalog.links.length },
+    { value: "sponsored", label: "Sponsored", icon: Megaphone, count: catalog.sponsored.length },
+    { value: "changelog", label: "Changelog", icon: ListChecks, count: catalog.changelog.length },
+  ];
+
+  function addNew() {
+    if (!catalog || view === "dashboard") return;
+    const now = new Date().toISOString();
+    if (view === "models") openEditor("models", newModelTemplate(catalog, now), true);
+    if (view === "providers") openEditor("providers", newProviderTemplate(catalog, now), true);
+    if (view === "links") openEditor("links", newLinkTemplate(catalog, now), true);
+    if (view === "sponsored") openEditor("sponsored", newSponsoredTemplate(catalog, now), true);
+    if (view === "changelog") openEditor("changelog", { id: `change-${now.slice(0, 10)}-${catalog.changelog.length + 1}`, date: now.slice(0, 10), kind: "data", title: "Describe the update", description: "What changed and why." } satisfies ChangelogEntry, true);
+  }
+
+  const editButton = (label: string, onClick: () => void) => (
+    <button type="button" className="rounded px-2 py-1 text-[12.5px] text-muted-foreground hover:bg-surface-2 hover:text-foreground" onClick={onClick}>{label}</button>
+  );
 
   return (
-    <div className="content-width pb-14">
-      <PageHeading eyebrow="Good information is a work in progress" title="The catalog studio." description="Keep the details current, the sources clear, and the next version easy to find."><Button variant="outline" onClick={signOut} disabled={busy}><LogOut size={13} />Sign out</Button></PageHeading>
-      <div className="admin-stats"><div><Database size={18} /><strong>{catalog.models.length}</strong><span>Model versions</span></div><div><Building2 size={18} /><strong>{catalog.providers.length}</strong><span>Providers</span></div><div><BookOpen size={18} /><strong>{catalog.models.reduce((sum, model) => sum + model.benchmarks.length, 0)}</strong><span>Benchmark entries</span></div><div><ShieldCheck size={18} /><strong className="!text-lg">{storage === "local" ? "Local file" : "Supabase"}</strong><span>Persistent storage</span></div></div>
-      <div className="admin-publish-bar"><div className="flex items-center gap-3"><span className={cn("status-dot", dirty && "!bg-amber-500")} /><div><strong>{dirty ? "You have unpublished changes." : "The catalog is up to date."}</strong><p>Published {formatDate(catalog.updatedAt)}. {storage === "local" ? "Stored on this server's local disk." : "Stored in your PostgreSQL database."}</p></div></div><div className="flex flex-wrap items-center gap-2"><Button variant="outline" size="sm" onClick={exportCatalog}><Download size={12} />Export JSON</Button><Button variant="outline" size="sm" onClick={() => dirty ? setConfirmReload(true) : void reload()} disabled={busy}><RotateCcw size={12} />Reload</Button><Button size="sm" onClick={publish} disabled={!dirty || busy}>{busy ? <LoaderCircle size={12} className="animate-spin" /> : <Save size={12} />}Publish catalog</Button></div></div>
-      {error && <div role="alert" className="my-5 rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-xs leading-6 whitespace-pre-wrap text-destructive">{error}</div>}
-      <div className="admin-toolbar"><div className="model-tabs !mb-0"><button className="model-tab" aria-pressed={view === "models"} onClick={() => setView("models")}><Code2 size={13} />Model versions</button><button className="model-tab" aria-pressed={view === "providers"} onClick={() => setView("providers")}><Building2 size={13} />Providers</button></div><div className="flex items-center gap-3"><div className="directory-search !py-2.5"><Search size={14} /><input value={query} onChange={(event) => setQuery(event.target.value)} aria-label="Search catalog records" placeholder="Find a record..." /></div><Button variant="outline" size="sm" onClick={() => {
-        const now = new Date().toISOString();
-        if (view === "models") openEditor({ kind: "model", record: newModelTemplate(catalog, now), isNew: true });
-        else openEditor({ kind: "provider", record: newProviderTemplate(catalog, now), isNew: true });
-      }}><Plus size={13} />Add {view === "models" ? "model" : "provider"}</Button></div></div>
-      <div className="data-table-wrapper"><table className="data-table"><caption className="sr-only">Editable {view} in the catalog</caption><thead><tr><th>{view === "models" ? "Model version" : "Provider"}</th><th>{view === "models" ? "Status" : "Country"}</th><th>Updated</th><th>Edit record</th><th><span className="sr-only">View public page</span></th></tr></thead><tbody>
-        {records.map((record) => {
-          const isModel = "providerId" in record;
-          const provider = isModel ? getProvider(catalog, record.providerId) : record;
-          return <tr key={record.id}><td><div className="flex items-center gap-3"><ProviderLogo provider={provider} size={34} /><div><strong className="text-xs font-semibold">{record.name}</strong><p className="mt-1 text-[9px] text-muted-foreground">{isModel ? `${provider.name} / ${record.version}` : record.slug}</p></div></div></td><td><span className={cn("tag", isModel && record.status === "preview" && "tag-amber")}>{isModel ? record.status : record.country ?? "Unknown"}</span></td><td>{formatDate(record.updatedAt, true)}</td><td><div className="flex gap-2"><button className="admin-edit-link" onClick={() => openEditor(isModel ? { kind: "model", record, isNew: false } : { kind: "provider", record, isNew: false })}>Details</button>{isModel && <><button className="admin-edit-link" onClick={() => openEditor({ kind: "model", record, isNew: false }, "pricing")}>Pricing</button><button className="admin-edit-link" onClick={() => openEditor({ kind: "model", record, isNew: false }, "capabilities")}>Capabilities</button><button className="admin-edit-link" onClick={() => openEditor({ kind: "model", record, isNew: false }, "benchmarks")}>Benchmarks</button><button className="admin-edit-link" onClick={() => openEditor({ kind: "model", record, isNew: false }, "releases")}>Releases</button></>}</div></td><td><Link href={`/${isModel ? "models" : "companies"}/${record.slug}`} target="_blank" aria-label={`View ${record.name} public page`} className="text-muted-foreground hover:text-primary"><ExternalLink size={13} /></Link></td></tr>;
-        })}
-        {!records.length && <tr><td colSpan={5} className="!py-10 text-center text-muted-foreground">No records match this search.</td></tr>}
-      </tbody></table></div>
-      <div className="notice mt-6"><Info size={16} /><div><p>Changes stay in your draft until you publish. Publishing validates the complete catalog and rejects conflicting updates. To retire a model, set its status to &ldquo;deprecated&rdquo;; keep the record for historical comparisons.</p><p className="mt-2">Use null for unknown facts. Known facts need reliable provenance; updating a record does not automatically reverify each fact. Maintain individual source and last-updated fields when reviewing them.</p></div></div>
+    <div className="container-page pb-16">
+      <div className="flex flex-wrap items-end justify-between gap-4 py-8">
+        <div>
+          <p className="eyebrow">Admin</p>
+          <h1 className="mt-1 text-3xl">Catalog studio</h1>
+          <p className="mt-1 text-[14px] text-muted-foreground">Storage: {storage === "local" ? "local file" : "Supabase"} · Published {formatDate(catalog.updatedAt)}{catalog.updatedBy ? ` by ${catalog.updatedBy}` : ""}</p>
+        </div>
+        <Button variant="outline" onClick={signOut} disabled={busy}><LogOut size={14} />Sign out</Button>
+      </div>
+
+      <div className="sticky top-[var(--header-height)] z-20 -mx-2 mb-6 flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-popover px-4 py-3 shadow-[var(--shadow-sm)]">
+        <p className="flex items-center gap-2 text-[14px]">
+          <span className={cn("status-dot", dirty && "!bg-[var(--warning)]")} aria-hidden="true" />
+          {dirty ? "Unpublished changes in your draft." : "Draft matches the published catalog."}
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" size="sm" onClick={exportCatalog}><Download size={13} />Export JSON</Button>
+          <Button variant="outline" size="sm" onClick={() => (dirty ? setConfirmReload(true) : void reload())} disabled={busy}><RotateCcw size={13} />Reload</Button>
+          <Button size="sm" onClick={publish} disabled={!dirty || busy}>{busy ? <LoaderCircle size={13} className="animate-spin" /> : <Save size={13} />}Publish catalog</Button>
+        </div>
+      </div>
+      {error && <div role="alert" className="mb-5 rounded-lg border p-4 text-[13px] whitespace-pre-wrap text-danger">{error}</div>}
+
+      <div className="mb-5 flex flex-wrap items-center gap-2 border-b pb-3" role="tablist" aria-label="Studio sections">
+        {tabs.map(({ value, label, icon: Icon, count }) => (
+          <button key={value} type="button" role="tab" aria-selected={view === value} onClick={() => { setView(value); setQuery(""); }} className="inline-flex h-9 items-center gap-2 rounded-md px-3 text-[13.5px] text-muted-foreground hover:bg-surface-2 aria-selected:bg-surface-2 aria-selected:font-medium aria-selected:text-foreground">
+            <Icon size={15} aria-hidden="true" />{label}{count !== undefined && <span className="text-xs tabular opacity-70">{count}</span>}
+          </button>
+        ))}
+        {view !== "dashboard" && (
+          <div className="ml-auto flex items-center gap-2">
+            <div className="relative">
+              <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+              <input className="field !h-9 !w-56 !pl-8" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter…" aria-label="Filter records" />
+            </div>
+            <Button size="sm" variant="outline" onClick={addNew}><Plus size={14} />Add</Button>
+          </div>
+        )}
+      </div>
+
+      {view === "dashboard" && <Dashboard catalog={catalog} />}
+
+      {view === "models" && (
+        <div className="table-wrap">
+          <table className="data-table">
+            <caption className="sr-only">Models</caption>
+            <thead><tr><th scope="col" className="sticky-col">Model</th><th scope="col">Status</th><th scope="col">Updated</th><th scope="col">Edit</th><th scope="col">Lifecycle</th><th scope="col"><span className="sr-only">Public page</span></th></tr></thead>
+            <tbody>
+              {catalog.models.filter((model) => `${model.name} ${model.version} ${providerName(model.providerId)}`.toLowerCase().includes(q)).map((model) => {
+                const provider = getProvider(catalog, model.providerId);
+                return (
+                  <tr key={model.id}>
+                    <th scope="row" className="sticky-col font-normal">
+                      <span className="flex items-center gap-2.5"><ProviderLogo provider={provider} size={26} /><span><span className="block font-medium">{model.name}</span><span className="text-xs text-muted-foreground">{provider.name} · {model.version}</span></span></span>
+                    </th>
+                    <td><span className={cn("badge", model.status !== "active" && `badge-${model.status}`)}>{statusLabels[model.status]}</span></td>
+                    <td className="text-xs text-muted-foreground">{formatDate(model.updatedAt, "short")}{model.updatedBy ? ` · ${model.updatedBy}` : ""}</td>
+                    <td>
+                      <span className="flex flex-wrap gap-0.5">
+                        {modelSections.map((section) => <span key={section.value}>{editButton(section.value === "record" ? "Details" : section.label, () => openEditor("models", model, false, section.value))}</span>)}
+                      </span>
+                    </td>
+                    <td>
+                      <span className="flex gap-0.5">
+                        {model.status !== "deprecated" && model.status !== "retired" && editButton("Deprecate", () => setStatus(model, "deprecated"))}
+                        {model.status !== "retired" && <button type="button" className="inline-flex items-center gap-1 rounded px-2 py-1 text-[12.5px] text-muted-foreground hover:bg-surface-2 hover:text-foreground" onClick={() => setStatus(model, "retired")}><Archive size={12} aria-hidden="true" />Archive</button>}
+                        {model.status !== "active" && editButton("Reactivate", () => setStatus(model, "active"))}
+                      </span>
+                    </td>
+                    <td><Link href={modelPath(provider.slug, model.slug)} target="_blank" aria-label={`Open ${model.name}`} className="text-muted-foreground hover:text-foreground"><ExternalLink size={14} /></Link></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {view === "providers" && (
+        <div className="table-wrap">
+          <table className="data-table">
+            <caption className="sr-only">Providers</caption>
+            <thead><tr><th scope="col">Provider</th><th scope="col">Type</th><th scope="col">Models</th><th scope="col">Updated</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead>
+            <tbody>
+              {catalog.providers.filter((provider) => provider.name.toLowerCase().includes(q)).map((provider) => (
+                <tr key={provider.id}>
+                  <th scope="row" className="font-normal"><span className="flex items-center gap-2.5"><ProviderLogo provider={provider} size={26} /><span className="font-medium">{provider.name}</span></span></th>
+                  <td>{provider.kind === "lab" ? "Lab" : "Platform"}</td>
+                  <td className="tabular">{catalog.models.filter((model) => model.providerId === provider.id).length}</td>
+                  <td className="text-xs text-muted-foreground">{formatDate(provider.updatedAt, "short")}{provider.updatedBy ? ` · ${provider.updatedBy}` : ""}</td>
+                  <td>{editButton("Edit", () => openEditor("providers", provider, false))} <Link href={`/providers/${provider.slug}`} target="_blank" className="ml-2 inline-flex text-muted-foreground hover:text-foreground" aria-label={`Open ${provider.name}`}><ExternalLink size={14} /></Link></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {(view === "links" || view === "sponsored" || view === "changelog") && (() => {
+        const records = (catalog[view] as AnyRecord[]).filter((record) => JSON.stringify(record).toLowerCase().includes(q));
+        const describe = (record: AnyRecord) => {
+          if (view === "links") { const link = record as OutboundLink; return [link.label, `${link.targetType}: ${link.targetId}`, link.isAffiliate ? "Affiliate" : "Direct", link.enabled ? "Enabled" : "Disabled"]; }
+          if (view === "sponsored") { const placement = record as SponsoredPlacement; return [placement.title, `${placement.slot} · ${placement.sponsor}`, placement.enabled ? "Enabled" : "Disabled", formatDate(placement.startsAt, "short")]; }
+          const entry = record as ChangelogEntry; return [entry.title, entry.kind, formatDate(entry.date, "short"), ""];
+        };
+        return (
+          <>
+            {view === "links" && <p className="mb-3 flex gap-2 text-[13px] text-muted-foreground"><Info size={14} className="mt-0.5 shrink-0" />Each link overrides a model or provider&apos;s &ldquo;Try&rdquo; button. Affiliate links are disclosed on the page and marked rel=&quot;sponsored&quot;. Clicks are counted at /go before redirecting.</p>}
+            {view === "sponsored" && <p className="mb-3 flex gap-2 text-[13px] text-muted-foreground"><TriangleAlert size={14} className="mt-0.5 shrink-0" />Placements are always labeled &ldquo;Sponsored&rdquo; and never appear inside rankings or comparisons. Slots: home, models, comparison, provider, newsletter.</p>}
+            {records.length ? (
+              <ul className="divide-y rounded-lg border bg-card">
+                {records.map((record) => {
+                  const [title, meta, state, date] = describe(record);
+                  return (
+                    <li key={record.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
+                      <div className="min-w-0 flex-1"><p className="font-medium">{title}</p><p className="text-xs text-muted-foreground">{meta}{date ? ` · ${date}` : ""}</p></div>
+                      {state && <span className="badge">{state}</span>}
+                      {editButton("Edit", () => openEditor(view, record, false))}
+                      <button type="button" className="icon-btn !size-8" onClick={() => remove(view, record.id)} aria-label={`Remove ${title}`}><Trash2 size={14} /></button>
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : <p className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">Nothing here yet. Use “Add” to create one.</p>}
+          </>
+        );
+      })()}
+
       <Dialog open={editing !== null} onOpenChange={(open) => { if (!open) { setEditing(null); setIssues([]); } }}>
-        <DialogContent className="admin-editor !max-w-4xl" showCloseButton={false}>
-          <div className="flex items-start justify-between gap-5"><div><DialogTitle className="text-xl">{editing?.isNew ? `Add a ${editing.kind}` : editing?.record.name}</DialogTitle><DialogDescription className="mt-2">Source-backed records. Schema-validated edits. No invisible defaults.</DialogDescription></div><button onClick={() => setEditing(null)} aria-label="Close record editor" className="p-1 text-muted-foreground"><X size={19} /></button></div>
-          <div className="flex flex-wrap items-center justify-between gap-2 border-y py-3"><span className="flex items-center gap-2 text-xs font-medium"><FileJson size={15} className="text-primary" />{sections.find((item) => item.value === section)?.label} editor</span><span className="text-[10px] text-muted-foreground">JSON &middot; validate before applying</span></div>
-          {editing?.isNew && <div className="notice"><Sparkles size={15} /><p>Start with a unique id, a URL-friendly slug without &ldquo;-vs-&rdquo;, a name, and an official website. New models start with unknown specifications. Add a valid provider first if needed.</p></div>}
-          <details className="admin-editor-help"><summary><Info size={12} />Data format guide</summary><p>Each fact uses <code>{`{"value": null, "source": null, "updatedAt": "ISO date"}`}</code>. To publish a known value, include a source object with <code>label</code>, an official <code>https://</code> URL, and <code>checkedAt</code>. Benchmarks need <code>id, name, score, date, source</code>. Releases need <code>id, date, title, description, type, source</code>. Release types: <code>release, pricing, capability, deprecation</code>. Keep USD per 1M tokens as the pricing unit.</p></details>
-          <label htmlFor="record-json" className="sr-only">Record JSON</label><textarea id="record-json" spellCheck={false} className="admin-json" value={text} onChange={(event) => setText(event.target.value)} />
-          {issues.length > 0 && <div className="admin-validation" role="alert"><strong>These details need attention:</strong><ul>{issues.slice(0, 15).map((issue, index) => <li key={`${index}-${issue}`}>{issue}</li>)}</ul>{issues.length > 15 && <p>...and {issues.length - 15} more validation issues.</p>}</div>}
-          <div className="flex flex-wrap items-center justify-between gap-3"><p className="text-[10px] text-muted-foreground">Applying updates your draft. Publish it when you&apos;re ready.</p><div className="flex gap-2"><Button variant="outline" onClick={() => setEditing(null)}>Cancel</Button><Button onClick={applyEdit}><Check size={13} />Validate & apply</Button></div></div>
+        <DialogContent className="!max-w-4xl" showCloseButton={false}>
+          <div className="flex items-start justify-between gap-5">
+            <div>
+              <DialogTitle className="text-xl">{editing?.isNew ? `Add ${editing.collection.replace(/s$/, "")}` : "name" in (editing?.record ?? {}) ? (editing?.record as AIModel).name : editing?.record.id}</DialogTitle>
+              <DialogDescription className="mt-1">Schema-validated JSON. Known facts need a source; use <code>null</code> values for unknowns.</DialogDescription>
+            </div>
+            <button type="button" onClick={() => setEditing(null)} aria-label="Close editor" className="icon-btn"><X size={18} /></button>
+          </div>
+          {editing?.collection === "models" && (
+            <div className="flex flex-wrap gap-1 border-y py-2" role="tablist" aria-label="Record section">
+              {modelSections.map((entry) => (
+                <button key={entry.value} type="button" role="tab" aria-selected={editing.section === entry.value} className="h-8 rounded-md px-3 text-[13px] text-muted-foreground aria-selected:bg-surface-2 aria-selected:text-foreground" onClick={() => openEditor("models", editing.record, editing.isNew, entry.value)}>
+                  {entry.label}
+                </button>
+              ))}
+            </div>
+          )}
+          <details className="rounded-md border bg-surface p-3 text-[13px] text-muted-foreground">
+            <summary className="flex items-center gap-1.5 font-medium text-foreground"><FileJson size={14} />Data format guide</summary>
+            <p className="mt-2">Facts: <code>{`{"value": …, "source": {"label", "url", "checkedAt"}, "updatedAt", "note"?}`}</code>. Unknown: <code>{`{"value": null, "source": null, …}`}</code>. Benchmarks: <code>id, benchmarkId, score, display?, version, evaluatedAt, conditions, reportedBy (provider|independent), source</code>. Releases: <code>id, date, title, description, type (release|update|pricing|api-feature|context|modality|deprecation|retirement), source</code>. Trending requires <code>editorial.trendSource</code>. Prices are USD per 1M tokens; non-token pricing goes in <code>pricing.other</code>.</p>
+          </details>
+          <label htmlFor="record-json" className="sr-only">Record JSON</label>
+          <textarea id="record-json" spellCheck={false} className="mono h-[46vh] w-full resize-y rounded-md border bg-card p-3 text-[12.5px] leading-relaxed outline-none focus:border-ring" value={text} onChange={(event) => setText(event.target.value)} />
+          {issues.length > 0 && (
+            <div className="rounded-md border p-3 text-[13px] text-danger" role="alert">
+              <strong>Fix these before applying:</strong>
+              <ul className="mt-1 list-disc pl-5">{issues.slice(0, 15).map((issue, index) => <li key={`${index}-${issue}`}>{issue}</li>)}</ul>
+              {issues.length > 15 && <p>…and {issues.length - 15} more.</p>}
+            </div>
+          )}
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setEditing(null)}>Cancel</Button>
+            <Button onClick={applyEdit}><Check size={14} />Validate & apply</Button>
+          </div>
         </DialogContent>
       </Dialog>
-      <Dialog open={confirmReload} onOpenChange={setConfirmReload}><DialogContent><DialogTitle>Reload the published catalog?</DialogTitle><DialogDescription>This discards the unpublished in-memory draft. Export it first if you want to keep a copy. Published data will not be changed.</DialogDescription><div className="mt-3 flex justify-end gap-2"><Button variant="outline" onClick={() => setConfirmReload(false)}>Keep editing</Button><Button variant="destructive" disabled={busy} onClick={reload}>Discard draft & reload</Button></div></DialogContent></Dialog>
+
+      <Dialog open={confirmReload} onOpenChange={setConfirmReload}>
+        <DialogContent>
+          <DialogTitle>Discard your draft?</DialogTitle>
+          <DialogDescription>Reloading discards unpublished changes. Export first to keep a copy.</DialogDescription>
+          <div className="mt-3 flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setConfirmReload(false)}>Keep editing</Button>
+            <Button variant="destructive" disabled={busy} onClick={reload}>Discard & reload</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

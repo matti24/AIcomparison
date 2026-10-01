@@ -27,11 +27,25 @@ export async function PUT(request: Request) {
   if (!isSameOrigin(request)) return jsonResponse({ error: "Publish changes from this website's own origin." }, 403);
   try {
     if (!await isAuthorized()) return jsonResponse({ error: "Your admin session has expired. Sign in again before publishing." }, 401);
-    const body = z.object({ catalog: catalogSchema, expectedUpdatedAt: z.string().min(1).max(100) }).strict().safeParse(await readJsonBody(request, 4_194_304));
+    const body = z.object({ catalog: catalogSchema, expectedUpdatedAt: z.string().min(1).max(100) }).strict().safeParse(await readJsonBody(request, 16_777_216));
     if (!body.success) {
-      return jsonResponse({ error: "The catalog could not be validated.", issues: body.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`) }, 422);
+      return jsonResponse({ error: "The catalog could not be validated.", issues: body.error.issues.slice(0, 50).map((issue) => `${issue.path.join(".")}: ${issue.message}`) }, 422);
     }
-    const catalog = await saveCatalog(body.data.catalog, body.data.expectedUpdatedAt);
+    // Record who changed what: every edited model/provider gets updated_at and updated_by.
+    const current = await getCatalog();
+    const now = new Date().toISOString();
+    const editor = "admin";
+    const stamp = <T extends { id: string; updatedAt: string; updatedBy?: string }>(records: T[], previous: T[]) => {
+      const before = new Map(previous.map((record) => [record.id, JSON.stringify({ ...record, updatedAt: null, updatedBy: null })]));
+      return records.map((record) => before.get(record.id) === JSON.stringify({ ...record, updatedAt: null, updatedBy: null }) ? record : { ...record, updatedAt: now, updatedBy: editor });
+    };
+    const proposed = {
+      ...body.data.catalog,
+      models: stamp(body.data.catalog.models, current.models),
+      providers: stamp(body.data.catalog.providers, current.providers),
+      updatedBy: editor,
+    };
+    const catalog = await saveCatalog(proposed, body.data.expectedUpdatedAt);
     revalidatePath("/", "layout");
     return jsonResponse({ catalog, storage: getStorageMode() });
   } catch (error) {

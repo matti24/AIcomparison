@@ -1,125 +1,211 @@
 "use client";
 
-import { createContext, useCallback, useContext, useState } from "react";
+import { createContext, useCallback, useContext, useMemo, useState } from "react";
 import { ThemeProvider } from "next-themes";
 import { Toaster, toast } from "sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { createBrowserStore } from "@/lib/browser-store";
-import type { Catalog } from "@/lib/types";
+import type { ModelSummary, ProviderSummary } from "@/lib/catalog";
+import { track } from "@/lib/analytics";
 
-export interface WatchlistEntry {
+export const MAX_COMPARE = 4;
+
+export interface FavoriteEntry {
   slug: string;
+  addedAt: string;
+}
+
+export type WatchAlert = "pricing" | "release" | "deprecation" | "update";
+
+export interface WatchEntry {
+  type: "model" | "provider";
+  id: string;
+  alerts: WatchAlert[];
   addedAt: string;
   seenAt: string;
 }
 
-function isStringList(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((item) => typeof item === "string");
-}
+const isStringList = (value: unknown): value is string[] => Array.isArray(value) && value.every((item) => typeof item === "string");
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
 
-function isWatchlist(value: unknown): value is WatchlistEntry[] {
-  return Array.isArray(value) && value.every((item: unknown) => (
-    typeof item === "object" && item !== null &&
-    "slug" in item && typeof item.slug === "string" &&
-    "addedAt" in item && typeof item.addedAt === "string" &&
-    "seenAt" in item && typeof item.seenAt === "string"
-  ));
-}
+const isFavorites = (value: unknown): value is FavoriteEntry[] =>
+  Array.isArray(value) && value.every((item) => isRecord(item) && typeof item.slug === "string" && typeof item.addedAt === "string");
 
-const useWatchlist = createBrowserStore<WatchlistEntry[]>("ai-compare:watchlist:v1", [], isWatchlist);
-const useRecent = createBrowserStore<string[]>("ai-compare:recent:v1", [], isStringList);
-const useSelection = createBrowserStore<string[]>("ai-compare:selection:v1", [], (value): value is string[] => isStringList(value) && value.length <= 4 && new Set(value).size === value.length);
+const isWatchlist = (value: unknown): value is WatchEntry[] =>
+  Array.isArray(value) && value.every((item) => isRecord(item) &&
+    (item.type === "model" || item.type === "provider") && typeof item.id === "string" &&
+    isStringList(item.alerts) && typeof item.addedAt === "string" && typeof item.seenAt === "string");
+
+const useFavoritesStore = createBrowserStore<FavoriteEntry[]>("ai-compare:favorites:v1", [], isFavorites);
+const useWatchStore = createBrowserStore<WatchEntry[]>("ai-compare:watchlist:v2", [], isWatchlist);
+const useRecentModels = createBrowserStore<string[]>("ai-compare:recent:v1", [], isStringList);
+const useRecentSearches = createBrowserStore<string[]>("ai-compare:recent-searches:v1", [], isStringList);
+const useSelection = createBrowserStore<string[]>(
+  "ai-compare:selection:v1",
+  [],
+  (value): value is string[] => isStringList(value) && value.length <= MAX_COMPARE && new Set(value).size === value.length,
+);
 
 interface AppContextValue {
-  catalog: Catalog;
+  models: ModelSummary[];
+  providers: ProviderSummary[];
+  modelBySlug: Map<string, ModelSummary>;
+  providerById: Map<string, ProviderSummary>;
   referenceDate: string;
-  favorites: WatchlistEntry[];
-  recent: string[];
-  selected: string[];
+  catalogUpdatedAt: string;
+  favorites: FavoriteEntry[];
+  isFavorite: (slug: string) => boolean;
   toggleFavorite: (slug: string) => void;
+  watchlist: WatchEntry[];
+  isWatching: (type: WatchEntry["type"], id: string) => boolean;
+  toggleWatch: (type: WatchEntry["type"], id: string, alerts?: WatchAlert[]) => void;
+  markWatchSeen: () => void;
+  recent: string[];
   markViewed: (slug: string) => void;
+  recentSearches: string[];
+  rememberSearch: (query: string) => void;
+  clearRecentSearches: () => void;
+  selected: string[];
   toggleSelected: (slug: string) => void;
-  clearSelected: () => void;
   setSelected: (slugs: string[]) => void;
-  searchOpen: boolean;
-  setSearchOpen: (open: boolean) => void;
+  clearSelected: () => void;
+  paletteOpen: boolean;
+  setPaletteOpen: (open: boolean) => void;
+  paletteMode: "search" | "add-to-compare";
+  openPalette: (mode?: "search" | "add-to-compare") => void;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
 
-function AppState({ catalog, referenceDate, children }: { catalog: Catalog; referenceDate: string; children: React.ReactNode }) {
-  const [favorites, setFavorites] = useWatchlist();
-  const [recent, setRecent] = useRecent();
-  const [savedSelection, setSavedSelection] = useSelection();
-  const [searchOpen, setSearchOpen] = useState(false);
-  const selected = savedSelection.filter((slug) => catalog.models.some((model) => model.slug === slug));
+function storageError(error: unknown, message: string) {
+  console.error(message, error);
+  toast.error(message, { description: "Check that browser storage is enabled for this site." });
+}
 
+interface CatalogProps {
+  models: ModelSummary[];
+  providers: ProviderSummary[];
+  referenceDate: string;
+  catalogUpdatedAt: string;
+}
+
+function AppState({ models, providers, referenceDate, catalogUpdatedAt, children }: CatalogProps & { children: React.ReactNode }) {
+  const [favorites, setFavorites] = useFavoritesStore();
+  const [watchlist, setWatchlist] = useWatchStore();
+  const [recent, setRecent] = useRecentModels();
+  const [recentSearches, setRecentSearches] = useRecentSearches();
+  const [savedSelection, setSavedSelection] = useSelection();
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [paletteMode, setPaletteMode] = useState<"search" | "add-to-compare">("search");
+
+  const modelBySlug = useMemo(() => new Map(models.map((model) => [model.slug, model])), [models]);
+  const providerById = useMemo(() => new Map(providers.map((provider) => [provider.id, provider])), [providers]);
+  const selected = useMemo(() => savedSelection.filter((slug) => modelBySlug.has(slug)), [savedSelection, modelBySlug]);
+
+  const isFavorite = useCallback((slug: string) => favorites.some((entry) => entry.slug === slug), [favorites]);
   const toggleFavorite = useCallback((slug: string) => {
-    const isSaved = favorites.some((entry) => entry.slug === slug);
+    const saved = favorites.some((entry) => entry.slug === slug);
     try {
-      const now = new Date().toISOString();
-      setFavorites((previous) => isSaved
-        ? previous.filter((entry) => entry.slug !== slug)
-        : [...previous, { slug, addedAt: now, seenAt: now }]);
-      toast.success(isSaved ? "Removed from your watchlist" : "Added to your watchlist", {
-        description: isSaved ? undefined : "Saved on this browser. No account needed.",
+      setFavorites((previous) => saved ? previous.filter((entry) => entry.slug !== slug) : [...previous, { slug, addedAt: new Date().toISOString() }]);
+      const name = modelBySlug.get(slug)?.name ?? "Model";
+      toast.success(saved ? `${name} removed from favorites` : `${name} added to favorites`, {
+        description: saved ? undefined : "Saved in this browser. Accounts will sync favorites across devices.",
       });
     } catch (error) {
-      console.error("Watchlist storage failed:", error);
-      toast.error("Could not save your watchlist. Please enable browser storage.");
+      storageError(error, "Could not update your favorites.");
     }
-  }, [favorites, setFavorites]);
+  }, [favorites, setFavorites, modelBySlug]);
+
+  const isWatching = useCallback((type: WatchEntry["type"], id: string) => watchlist.some((entry) => entry.type === type && entry.id === id), [watchlist]);
+  const toggleWatch = useCallback((type: WatchEntry["type"], id: string, alerts: WatchAlert[] = ["pricing", "release", "deprecation", "update"]) => {
+    const watching = watchlist.some((entry) => entry.type === type && entry.id === id);
+    try {
+      const now = new Date().toISOString();
+      setWatchlist((previous) => watching
+        ? previous.filter((entry) => !(entry.type === type && entry.id === id))
+        : [...previous, { type, id, alerts, addedAt: now, seenAt: now }]);
+      toast.success(watching ? "Stopped following" : "Following", {
+        description: watching ? undefined : "Changes appear in your watchlist. Email alerts arrive with accounts.",
+      });
+    } catch (error) {
+      storageError(error, "Could not update your watchlist.");
+    }
+  }, [watchlist, setWatchlist]);
+
+  const markWatchSeen = useCallback(() => {
+    try {
+      const now = new Date().toISOString();
+      setWatchlist((previous) => previous.map((entry) => ({ ...entry, seenAt: now })));
+    } catch (error) {
+      storageError(error, "Could not update your watchlist.");
+    }
+  }, [setWatchlist]);
 
   const markViewed = useCallback((slug: string) => {
     try {
       setRecent((previous) => [slug, ...previous.filter((item) => item !== slug)].slice(0, 8));
-      setFavorites((previous) => previous.map((entry) => entry.slug === slug
-        ? { ...entry, seenAt: new Date().toISOString() } : entry));
-    } catch (error) {
-      console.error("Recently viewed storage failed:", error);
-      toast.error("Recently viewed models could not be saved in this browser.");
+    } catch {
+      // Recently viewed is a convenience; failing silently is acceptable.
     }
-  }, [setFavorites, setRecent]);
+  }, [setRecent]);
+
+  const rememberSearch = useCallback((query: string) => {
+    const value = query.trim().slice(0, 80);
+    if (value.length < 2) return;
+    try {
+      setRecentSearches((previous) => [value, ...previous.filter((item) => item.toLowerCase() !== value.toLowerCase())].slice(0, 6));
+    } catch {
+      // Ignore storage failures for search history.
+    }
+  }, [setRecentSearches]);
 
   const setSelected = useCallback((slugs: string[]) => {
-    if (slugs.length > 4 || new Set(slugs).size !== slugs.length) {
-      toast.error("Choose up to four different models.");
+    if (slugs.length > MAX_COMPARE || new Set(slugs).size !== slugs.length) {
+      toast.error(`Choose up to ${MAX_COMPARE} different models.`);
       return;
     }
     try {
       setSavedSelection(slugs);
     } catch (error) {
-      console.error("Comparison selection storage failed:", error);
-      toast.error("Could not save your selection. Please enable browser storage.");
+      storageError(error, "Could not save your comparison selection.");
     }
   }, [setSavedSelection]);
 
-  function toggleSelected(slug: string) {
+  const toggleSelected = useCallback((slug: string) => {
     if (selected.includes(slug)) {
       setSelected(selected.filter((item) => item !== slug));
-    } else if (selected.length === 4) {
-      toast.error("Your comparison is full", { description: "Remove a model to add another. You can compare up to four." });
+    } else if (selected.length >= MAX_COMPARE) {
+      toast.error("Comparison is full", { description: `Remove a model to add another. You can compare up to ${MAX_COMPARE}.` });
     } else {
       setSelected([...selected, slug]);
+      if (selected.length === 1) track("comparison_created", { models: [...selected, slug].join(",") });
     }
-  }
+  }, [selected, setSelected]);
 
-  return (
-    <AppContext.Provider value={{
-      catalog, referenceDate, favorites, recent, selected, toggleFavorite, markViewed, toggleSelected,
-      clearSelected: () => setSelected([]), setSelected, searchOpen, setSearchOpen,
-    }}>
-      {children}
-    </AppContext.Provider>
-  );
+  const openPalette = useCallback((mode: "search" | "add-to-compare" = "search") => {
+    setPaletteMode(mode);
+    setPaletteOpen(true);
+  }, []);
+
+  const value: AppContextValue = {
+    models, providers, modelBySlug, providerById, referenceDate, catalogUpdatedAt,
+    favorites, isFavorite, toggleFavorite,
+    watchlist, isWatching, toggleWatch, markWatchSeen,
+    recent, markViewed, recentSearches, rememberSearch,
+    clearRecentSearches: () => { try { setRecentSearches([]); } catch { /* ignore */ } },
+    selected, toggleSelected, setSelected, clearSelected: () => setSelected([]),
+    paletteOpen, setPaletteOpen, paletteMode, openPalette,
+  };
+
+  return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
 
-export function AppProvider({ catalog, referenceDate, children }: { catalog: Catalog; referenceDate: string; children: React.ReactNode }) {
+export function AppProvider({ children, ...props }: CatalogProps & { children: React.ReactNode }) {
   return (
-    <ThemeProvider attribute="class" defaultTheme="light" enableSystem disableTransitionOnChange>
+    <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
       <TooltipProvider delayDuration={200}>
-        <AppState catalog={catalog} referenceDate={referenceDate}>{children}</AppState>
-        <Toaster position="bottom-right" richColors closeButton />
+        <AppState {...props}>{children}</AppState>
+        <Toaster position="bottom-right" closeButton toastOptions={{ className: "!rounded-[10px] !text-[13.5px]" }} />
       </TooltipProvider>
     </ThemeProvider>
   );

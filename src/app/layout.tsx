@@ -1,57 +1,52 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { AppProvider } from "@/components/app-provider";
-import { CompareBar, GlobalSearch, SiteFooter, SiteHeader } from "@/components/site-shell";
-import { getPageCatalog, getPageDate } from "@/lib/server-catalog";
+import { CommandPalette } from "@/components/command-palette";
+import { CompareTray } from "@/components/compare-tray";
+import { CookieConsent, PageViewTracker } from "@/components/site-client";
+import { SiteFooter } from "@/components/site-footer";
+import { SiteHeader } from "@/components/site-header";
+import { getPageCatalog, getPageDate, getPageSummaries, siteUrl } from "@/lib/server-catalog";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-  preload: false,
-});
+const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
+const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"], preload: false });
 
 export const metadata: Metadata = {
-  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000"),
+  metadataBase: new URL(siteUrl()),
   title: {
-    default: "AI Compare - Find your next AI advantage",
+    default: "AI Compare — Compare AI Models, Pricing & Benchmarks",
     template: "%s | AI Compare",
   },
-  description: "Find the right AI for your next big idea. Explore and compare AI models by pricing, context, capabilities, and source-backed specifications.",
+  description: "Compare pricing, context windows, modalities, benchmarks, and API access across leading AI models and providers. Every fact links to its source.",
   applicationName: "AI Compare",
-  openGraph: {
-    type: "website",
-    siteName: "AI Compare",
-    title: "AI Compare - Less noise. Better AI choices.",
-    description: "A little clarity in the world of AI. Discover, compare, and find your next AI model.",
-  },
+  openGraph: { type: "website", siteName: "AI Compare", locale: "en_US" },
   twitter: { card: "summary_large_image" },
+};
+
+export const viewport: Viewport = {
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
+    { media: "(prefers-color-scheme: dark)", color: "#09090b" },
+  ],
 };
 
 export const dynamic = "force-dynamic";
 
 export default async function RootLayout({ children }: LayoutProps<"/">) {
-  const catalog = await getPageCatalog();
+  const [catalog, summaries] = await Promise.all([getPageCatalog(), getPageSummaries()]);
   return (
-    <html
-      lang="en"
-      suppressHydrationWarning
-      data-scroll-behavior="smooth"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
-    >
+    <html lang="en" suppressHydrationWarning data-scroll-behavior="smooth" className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
       <body>
-        <AppProvider catalog={catalog} referenceDate={getPageDate()}>
+        <AppProvider models={summaries.models} providers={summaries.providers} referenceDate={getPageDate()} catalogUpdatedAt={catalog.updatedAt}>
           <a href="#main-content" className="skip-link">Skip to content</a>
           <SiteHeader />
           <main id="main-content">{children}</main>
-          <SiteFooter />
-          <GlobalSearch />
-          <CompareBar />
+          <SiteFooter modelCount={catalog.models.length} providerCount={catalog.providers.length} updatedAt={catalog.updatedAt} />
+          <CommandPalette />
+          <CompareTray />
+          <CookieConsent />
+          <PageViewTracker />
         </AppProvider>
       </body>
     </html>

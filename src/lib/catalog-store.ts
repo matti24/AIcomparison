@@ -1,13 +1,14 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
-import { link, mkdir, open, readFile, rename, unlink } from "node:fs/promises";
+import { link, mkdir, open, readFile, rename, stat, unlink } from "node:fs/promises";
 import path from "node:path";
 
 import { createClient } from "@supabase/supabase-js";
 
 import { seedCatalog } from "../data/catalog";
-import { catalogSchema, httpUrlSchema, timestampSchema } from "./catalog-schema";
+import { catalogSchema, parseCatalog, timestampSchema } from "./catalog-schema";
+import { CatalogStorageError, getSupabaseServerConfig, requireSupabaseServerConfig } from "./deployment-config";
 import type { Catalog } from "./types";
 
 export class ConflictError extends Error {
@@ -21,35 +22,17 @@ export class ConflictError extends Error {
 
 export { ConflictError as CatalogConflictError };
 
-export class CatalogStorageError extends Error {
-  readonly code = "CATALOG_STORAGE_ERROR";
-
-  constructor(message: string) {
-    super(message);
-    this.name = "CatalogStorageError";
-  }
-}
+export { CatalogStorageError } from "./deployment-config";
 
 export function getStorageMode(): "local" | "supabase" {
-  const url = process.env.SUPABASE_URL?.trim();
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
-
-  if (Boolean(url) !== Boolean(key)) {
-    throw new CatalogStorageError(
-      "Configure both SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY, or neither for local storage.",
-    );
-  }
-  if (!url || !key) return "local";
-  if (!httpUrlSchema.safeParse(url).success) {
-    throw new CatalogStorageError("SUPABASE_URL must be a valid HTTP(S) URL.");
-  }
-  return "supabase";
+  return getSupabaseServerConfig() ? "supabase" : "local";
 }
 
 function supabase() {
+  const { url, key } = requireSupabaseServerConfig();
   return createClient(
-    process.env.SUPABASE_URL!.trim(),
-    process.env.SUPABASE_SERVICE_ROLE_KEY!.trim(),
+    url,
+    key,
     {
       auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
       global: {
@@ -120,24 +103,32 @@ async function retryFileMutation(operation: () => Promise<void>) {
   }
 }
 
+// Parsed snapshots are reused while the file is unchanged; validation of a large catalog is not free.
+let localCache: { file: string; mtimeMs: number; size: number; catalog: Catalog } | null = null;
+
 async function readLocal(paths: LocalPaths): Promise<Catalog | null> {
   let content: string;
   try {
+    const info = await stat(/* turbopackIgnore: true */ paths.catalog);
+    if (localCache && localCache.file === paths.catalog && localCache.mtimeMs === info.mtimeMs && localCache.size === info.size) {
+      return localCache.catalog;
+    }
     content = await readFile(/* turbopackIgnore: true */ paths.catalog, "utf8");
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(content);
+    } catch {
+      throw new CatalogStorageError(
+        "Local catalog.json contains invalid JSON. Repair or restore it; the stored file has not been replaced.",
+      );
+    }
+    const catalog = parseCatalog(parsed);
+    localCache = { file: paths.catalog, mtimeMs: info.mtimeMs, size: info.size, catalog };
+    return catalog;
   } catch (error) {
     if (hasCode(error, "ENOENT")) return null;
     throw error;
   }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(content);
-  } catch {
-    throw new CatalogStorageError(
-      "Local catalog.json contains invalid JSON. Repair or restore it; the stored file has not been replaced.",
-    );
-  }
-  return catalogSchema.parse(parsed);
 }
 
 async function removeIfPresent(file: string) {
@@ -240,7 +231,7 @@ export async function getCatalog(): Promise<Catalog> {
         "The Supabase catalog is not initialized. Apply supabase/schema.sql and run npm run db:seed.",
       );
     }
-    return catalogSchema.parse(data);
+    return parseCatalog(data);
   }
 
   const paths = await localPaths();
@@ -272,7 +263,7 @@ export async function saveCatalog(
     });
     if (error) throw rpcError("save", error.code);
     if (data === null) throw new CatalogStorageError("Supabase did not return a saved catalog.");
-    return catalogSchema.parse(data);
+    return parseCatalog(data);
   }
 
   const paths = await localPaths();

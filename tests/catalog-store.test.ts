@@ -34,6 +34,8 @@ beforeEach(async () => {
   await mkdir(directory, { recursive: true });
   vi.stubEnv("SUPABASE_URL", "");
   vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "");
+  vi.stubEnv("SUPABASE_SECRET_KEY", "");
+  vi.stubEnv("VERCEL", "");
   vi.stubEnv("AI_COMPARE_DATA_DIR", directory);
 });
 
@@ -255,6 +257,22 @@ describe("Supabase adapter contract (mock HTTP, not a hosted database test)", ()
     expect(getStorageMode).toThrow(CatalogStorageError);
     configure();
     expect(getStorageMode()).toBe("supabase");
+  });
+
+  it("refuses local catalog reads and writes on Vercel before touching disk", async () => {
+    vi.stubEnv("VERCEL", "1");
+    await expect(getCatalog()).rejects.toThrow("Vercel requires Supabase");
+    await expect(saveCatalog(seedCatalog, seedCatalog.updatedAt)).rejects.toThrow("Vercel requires Supabase");
+    expect(await readdir(directory)).toEqual([]);
+  });
+
+  it("uses the marketplace secret for authenticated RPCs", async () => {
+    vi.stubEnv("SUPABASE_URL", "https://catalog.invalid");
+    vi.stubEnv("SUPABASE_SECRET_KEY", "sb_secret_test_only");
+    const fetchMock = vi.fn().mockResolvedValue(response(seedCatalog));
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await getCatalog()).toEqual(seedCatalog);
+    expect(new Headers(fetchMock.mock.calls[0][1].headers).get("apikey")).toBe("sb_secret_test_only");
   });
 
   it("reads the get_catalog RPC with no fetch caching and no local fallback", async () => {

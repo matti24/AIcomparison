@@ -1,6 +1,19 @@
 # AI Compare
 
-A source-linked, independent AI model directory and comparison app. Built with Next.js App Router, TypeScript, Tailwind CSS, shadcn/ui, Radix primitives, and Supabase-ready PostgreSQL persistence.
+An independent, source-linked AI model database and comparison platform. Compare pricing, context windows, modalities, capabilities, benchmarks, and API access across 280+ models from 35 providers — every fact links to the page it came from.
+
+Built with Next.js App Router, TypeScript, Tailwind CSS, Radix primitives, Recharts, Zod, and Supabase-ready PostgreSQL.
+
+## Live deployment
+
+- Public website: [https://ai-compare-two.vercel.app](https://ai-compare-two.vercel.app).
+- Vercel project: [mattis-projects-67217926 / ai-compare](https://vercel.com/mattis-projects-67217926/ai-compare).
+- Storage: Supabase Free (`ai-compare-db`, Frankfurt), with the full catalog, newsletter/waitlists, and analytics persisted in PostgreSQL. Vercel functions run in Frankfurt.
+- Production admin: `/admin`. Its independent credentials are saved in the git-ignored `.data/vercel-admin.env` and configured as Vercel Secrets. Never publish that file.
+
+The current release was deployed as an authenticated manual snapshot of the application files, not from a Git push. Changes in this workspace are not automatically published. For future Git-based deployments, connect the repository and verify that its commit authors are authorized for the Vercel project; Vercel may block deployments attributed to an unauthorized author.
+
+Accounts, payments, and the public Data API remain intentionally gated/coming soon. Legal and contact placeholders still need the operator's details; hosting does not fill them in.
 
 ## Run locally
 
@@ -8,122 +21,149 @@ Use Node.js 24 LTS and npm.
 
 ```powershell
 npm install
-npm run setup:local
-npm run dev -- --port 3001
+npm run setup:local      # generates a private .env.local with admin credentials
+npm run dev
 ```
 
-Open [http://localhost:3001](http://localhost:3001). The included **AI Compare: development server** VS Code task uses port 3001 because port 3000 was already occupied in the original workspace. Normal `npm run dev` starts on the first available Next.js development port.
+Set `NEXT_PUBLIC_SITE_URL` to the real origin (including the port) for canonical URLs, Open Graph images, robots, and sitemaps.
 
-The local setup generates a private, git-ignored `.env.local` containing random admin credentials. It never overwrites an existing environment file or prints credentials. Set `NEXT_PUBLIC_SITE_URL` to the actual origin, including the port, for canonical URLs, social metadata, robots, and the sitemap.
+The app works without a database. On first request the reference catalog in [src/data](src/data) is written to `.data/catalog.json`; admin edits are persisted there. Existing saved catalogs are never overwritten automatically. After pulling new reference data, run `npm run db:seed -- --replace` (it backs up the current file first).
 
-The initial app works without database credentials. Its editable reference dataset lives in [src/data/catalog.ts](src/data/catalog.ts). In local mode, published admin changes are persisted to `.data/catalog.json`; when no saved catalog exists, the seed is used. Existing saved catalogs are not overwritten when the seed changes.
+## Product
 
-## What works
+| Area | Route |
+| --- | --- |
+| Homepage: hero search, sourced trends, recent releases, popular comparisons, price overview, categories | `/` |
+| Explore with URL-synced filters (provider, category, availability, modality, status, price, context), sorting, grid/table views, column selection | `/models` |
+| Category landing pages (coding, reasoning, image/video generation, voice, embeddings, open source, 1M+ context, low-cost APIs, …) with derived stats, FAQ, and JSON-LD | `/models/[category]` |
+| Model profile: quick stats, capability matrix, pricing, cost calculator, benchmarks + chart, versions timeline, recent changes, similar models, sources | `/models/[provider]/[model]` |
+| Comparison builder and 2–4 model comparisons with sticky sections/headers/first column, “Show differences only”, objective numeric highlights, benchmark charts, calculator, generated factual summary + FAQ, copy/share, dynamic OG image | `/compare`, `/compare/a-vs-b` |
+| Providers with labs vs platforms, model groups, category breakdown, release timeline | `/providers`, `/providers/[slug]` |
+| Release feed (new models, updates, pricing, API features, deprecations, retirements) | `/releases` |
+| Benchmark explorer (independent vs provider-reported, version/conditions/source per result) | `/benchmarks` |
+| API pricing calculator and full price table | `/pricing-calculator` |
+| AI Finder (4-step wizard with explained matches) | `/ai-finder` |
+| Favorites and watchlist (browser storage; account sync prepared) | `/favorites`, `/watchlist` |
+| Pro pricing (waitlist until billing is configured), Data API waitlist | `/pricing`, `/api` |
+| Trust and legal | `/methodology`, `/about`, `/contact`, `/changelog`, `/privacy`, `/terms`, `/cookies`, `/affiliate-disclosure`, `/advertising-disclosure` |
+| Admin studio (analytics dashboard, models, providers, affiliate links, sponsored placements, changelog) | `/admin` |
 
-- Responsive homepage with source-linked model cards, editorial trend collections, recent releases, coding, multimodal, and open-model collections.
-- Search by model, provider, product, capability, or documented shortcuts such as `cheap API`, `models with video`, and `open source reasoning`.
-- Directory filters, URL-persisted sorting, card/table views, and meaningful empty states.
-- Two-to-four-model comparison with difference highlighting, source links, swapping, adding, sharing, copying, and swipeable mobile cards.
-- Shareable version-specific URLs: `/compare/model-a-vs-model-b`.
-- Individual model profiles with capabilities, pricing, independently recorded benchmarks, release timelines, source notes, and related models.
-- Company profiles that distinguish companies, products, and individual model versions.
-- Two-step model finder with explained, rule-based recommendations and an explicit no-match state.
-- Local-browser favorites, recently viewed models, comparison selections, and a watchlist release/update feed.
-- Light/dark mode, keyboard search (`Ctrl+K` / `Cmd+K`), accessible dialogs, technical tooltips, responsive loading states, error states, and reduced-motion support.
-- Protected admin studio for adding/updating providers and model versions, prices, capabilities, benchmarks, editorial selections, and release events.
-- Per-model and per-comparison metadata, Open Graph image, robots rules, and a dynamically generated sitemap.
+Global search / command palette: `Ctrl+K`, `⌘K`, or `/`. It understands intents such as “cheap coding”, “vision”, “1m context”, “open weights”, and comparisons such as “claude vs gemini”. A floating comparison tray (up to four models) persists across pages.
+
+Old URLs keep working: `/companies/*` → `/providers/*`, `/finder` → `/ai-finder`, `/open-source`, `/image-models`, `/video-models` → category pages, and previous single-segment model URLs redirect to `/models/[provider]/[model]`.
 
 ## Data principles
 
-Read the app's `/methodology` page for the visitor-facing explanation.
+Read `/methodology` for the visitor-facing version.
 
-- Known technical and pricing facts include `{ value, source, updatedAt, note? }`.
-- Sources include `{ label, url, checkedAt }`.
-- Unknown values are `null`, never fabricated or treated as zero/false/free.
-- Prices are USD per million tokens where that billing unit applies. Image/video or hosting costs with different billing units are not converted to invented token rates.
-- Product subscriptions are separate from model API pricing.
-- Open weights and open-source licenses are different categories.
-- Benchmark entries remain separate, each with a name, reported score, date, source, and optional methodology note. There is no combined "AI score."
-- "Trending", "most popular", coding picks, and popular comparison starting points are explicitly editorial, not observed traffic, market share, or performance rankings.
-- The catalog is a curated snapshot, not a live provider synchronization service. Check fact-level dates and official sources before making a purchasing or deployment decision.
-- Deprecated model versions remain searchable; preview versions are labeled.
-- Finder performance is an editorial use-case fit, not an objective best-model claim. A speed-based recommendation needs a documented speed category.
-- The search shortcut `cheap` means input price at most $1/1M tokens; `large context` means at least 128,000 tokens. Unknown specifications do not match supported-capability filters.
+- Every known fact is `{ value, source: { label, url, checkedAt }, updatedAt, note? }`. Known values without a source fail validation.
+- Unknown values are `null` and display as “Not disclosed” — never zero, “no”, or free.
+- Prices are USD per 1M tokens at the standard tier (input, cached input, output). Non-token prices (per image/second/minute) are stored verbatim in `pricing.other`. Third-party hosted prices are labeled in notes.
+- Benchmarks are stored per result with benchmark ID, score, version, evaluation date, conditions, reporter (`provider` / `independent`), and source. No combined “intelligence score”.
+- Trending requires a citable `trendSource` (e.g. an official launch post). Popularity is never invented.
+- Lifecycle: `active`, `preview`, `deprecated`, `retired`. Retired models stay reachable but are hidden from default lists.
+- Comparison highlights mark only objective numeric extremes (lowest published price, largest context/output).
+
+### Adding or updating reference data
+
+Reference data lives in provider files under [src/data/providers](src/data/providers), authored with the helpers in [src/data/define.ts](src/data/define.ts). Omitted fields become explicit unknowns. Benchmark definitions are in [src/data/benchmarks.ts](src/data/benchmarks.ts).
+
+```powershell
+npx tsx scripts/check-provider-file.ts src/data/providers/openai.ts --urls   # validate one file and probe every source URL
+npm run data:check                                                          # validate all provider files
+```
+
+Keep model IDs stable (they are URL slugs and database keys). Prefer official documentation, pricing pages, model cards, and announcements. The reference snapshot was verified on 2026-10-01.
+
+## Monetization
+
+- **Outbound / affiliate links** — every “Try” / docs / website click goes through `/go/[model|provider|sponsor]/[id]`, which counts the click (no cookies, no personal data), adds UTM parameters, and redirects to a catalog-defined destination (no open redirect). Admins manage `links` (destination URL, affiliate URL, UTM campaign, enabled). Affiliate links are disclosed on the page and use `rel="sponsored"`.
+- **Sponsored placements** — slots `home`, `models`, `comparison`, `provider`, `newsletter`; always labeled “Sponsored”, never inside rankings or comparison results; scheduled with `startsAt` / `endsAt` and an enabled flag.
+- **Newsletter** — “The AI Model Brief” forms on the homepage, model pages, release feed, footer, category and provider pages. Stored in `.data/subscribers.json` or the `newsletter_subscribers` table; exportable as CSV from the admin.
+- **AI Compare Pro** — plans in [src/lib/billing.ts](src/lib/billing.ts). Payments are not active: the page shows a waitlist until `STRIPE_SECRET_KEY`, `STRIPE_PRICE_PRO_MONTHLY`, and `STRIPE_PRICE_PRO_YEARLY` are configured and a checkout route is added. The schema includes `users.plan` and `stripe_customer_id`.
+- **Data API** — `/api` waitlist for a future B2B offering.
+
+## Analytics and privacy
+
+Product events (`page_view`, `search_performed`, `search_no_results`, `model_viewed`, `comparison_created`, `comparison_viewed`, `outbound_click`, `calculator_used`, `newsletter_subscribed`, `finder_completed`, `pro_upgrade_clicked`, `api_waitlist_joined`, `account_created`) are sent to `/api/events` only after the visitor accepts analytics in the consent banner. Events store a random per-tab session ID — no IP address, email, or name. The admin dashboard shows visitors, page views, model views, comparisons, outbound and affiliate clicks, newsletter signups, most viewed and most compared models, popular searches, and searches without results.
+
+Legal pages use visible placeholders until you set the `NEXT_PUBLIC_LEGAL_*` / contact variables in `.env.local` (see [.env.example](.env.example)). Review them with counsel before launch.
+
+## Accounts
+
+Favorites, watchlists, comparisons, and recent searches work without an account (browser storage). `/sign-in` shows the coming-soon state by default, even when Marketplace installs public database keys. To opt into passwordless Supabase Auth magic links, configure the Auth Site URL and allowed redirects, then set `NEXT_PUBLIC_ACCOUNTS_ENABLED=true`, `NEXT_PUBLIC_SUPABASE_URL`, and either `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` or the legacy `NEXT_PUBLIC_SUPABASE_ANON_KEY`. Account syncing and email alerts remain planned. The schema provides `users`, `favorites`, `watchlists`, `saved_comparisons`, and a `notifications` outbox with row-level security. No custom password cryptography is used.
 
 ## Catalog administration
 
-Open `/admin` and sign in with the `ADMIN_PASSWORD` value from your private `.env.local`.
+Open `/admin` and sign in with `ADMIN_PASSWORD` from `.env.local`.
 
-For a hosted deployment, configure:
+- **Analytics** — business dashboard and subscriber CSV export.
+- **Models** — edit the full record or focused sections (pricing, capabilities, benchmarks, releases, editorial); deprecate, archive (retire), or reactivate. Status changes add a dated lifecycle event.
+- **Providers**, **Affiliate links**, **Sponsored**, **Changelog** — JSON editors with schema validation.
+
+Drafts stay in the browser until **Publish catalog**. Publishing validates the full snapshot, rejects stale drafts with HTTP 409, and stamps every changed model/provider with `updatedAt` and `updatedBy`. Hosted deployments need:
 
 ```text
-ADMIN_PASSWORD=<a strong random value of at least 16 characters>
-ADMIN_SESSION_SECRET=<an independent random value of at least 32 characters>
+ADMIN_PASSWORD=<16+ random characters>
+ADMIN_SESSION_SECRET=<32+ random characters>
 NEXT_PUBLIC_SITE_URL=https://your-domain.example
 ```
 
-Never prefix server credentials with `NEXT_PUBLIC_`, commit `.env.local`, or expose a Supabase service-role key to browser code.
-
-### Editing workflow
-
-1. Sign in to the catalog studio.
-2. Choose **Model versions** or **Providers**.
-3. Add a new record, or open **Details**, **Pricing**, **Capabilities**, **Benchmarks**, or **Releases** on an existing model.
-4. Edit the structured JSON in the focused editor. Its data guide and validation errors describe required fields.
-5. Choose **Validate & apply** to update the in-memory draft.
-6. Choose **Publish catalog** to persist the complete validated snapshot.
-
-All known facts need provenance. New-model templates intentionally start with unknown specifications. Add source-backed facts rather than copying assumptions from a different model version. Keep record IDs stable, use unique URL slugs without `-vs-`, and use an existing provider ID. Retire a model with `status: "deprecated"` rather than removing its historical record.
-
-Providers can use a local `/logos/name.svg` (also PNG or WebP) or `logo: ""` for the built-in name monogram. Remote logo URLs are rejected. A new company does not require a logo upload or a UI redesign.
-
-Publishing checks `expectedUpdatedAt` and rejects stale edits with HTTP 409. Export your draft before reloading and merging someone else's changes. A publication error leaves the draft intact; the UI never reports an unsuccessful save as published. Browser refresh warns about unpublished changes, but drafts are not a replacement for a saved export.
-
-Admin access uses a signed eight-hour, HttpOnly, SameSite=Strict cookie, timing-safe password verification, bounded JSON requests, same-origin mutation checks, and a login-attempt limit. Production cookies require HTTPS. Changing the password or session secret invalidates existing sessions.
-
-If you deploy behind a reverse proxy, preserve the original `Host` header and HTTPS forwarding so same-origin checks see the browser-facing authority and scheme. Arbitrary forwarded-host headers are not trusted.
-
-The built-in login limiter is process-local and deliberately does not trust spoofable forwarded IP headers. For a multi-instance public deployment, also use a shared edge/reverse-proxy rate limit or replace the single-admin auth adapter with your organization's identity provider.
+Admin access uses a signed eight-hour HttpOnly, SameSite=Strict cookie, timing-safe password checks, same-origin mutation checks, bounded JSON bodies, and a login limiter. Use an edge rate limit or your identity provider for multi-instance deployments.
 
 ## Supabase / PostgreSQL
 
-Local filesystem mode is for a local machine or one Node server with persistent writable storage. **Do not rely on local file persistence in an ephemeral/serverless or multi-instance deployment.**
+Local file mode is for development or a single server with persistent storage. For production:
 
-To use Supabase:
+1. Create a Supabase project and apply [supabase/schema.sql](supabase/schema.sql) (safe to reapply; it upgrades v1 schemas).
+2. Set `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` on the server only.
+3. Run `npm run db:seed` (or `npm run db:seed -- --replace` to load new reference data with optimistic concurrency).
 
-1. Create a Supabase project.
-2. Apply [supabase/schema.sql](supabase/schema.sql) using the project's SQL editor.
-3. Set both `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` in the server environment.
-4. Run `npm run db:seed` with those variables loaded.
-5. Restart the app and confirm the admin studio displays **Supabase** storage.
+The app reads/writes a validated snapshot through `get_catalog()` / `save_catalog()` (advisory lock + version check). `save_catalog()` also projects the snapshot into normalized, indexed tables — `providers`, `models`, `categories`, `model_categories`, `model_capabilities`, `model_pricing`, append-only `pricing_history`, `benchmarks`, `benchmark_results`, `release_events`, `sources`, `model_sources` (per-fact provenance, exposed as the `data_sources` view), `affiliate_links`, `sponsored_placements` — plus views `model_versions`, `model_modalities`, `page_views`, `comparison_events`, and `outbound_clicks`. Product tables (`users`, `favorites`, `watchlists`, `saved_comparisons`, `notifications`, `newsletter_subscribers`, `analytics_events`) are never touched by publishing.
 
-The schema/store pair uses a transactional catalog snapshot with optimistic concurrency and structured provider/model records. Relational catalog surfaces expose capabilities, prices, sources, benchmark entries, model releases, and editorial trends. Favorites have a separate future account-backed storage surface; the current app intentionally saves personal watchlists only in the browser.
+All catalog deletions are scoped to snapshot model IDs or records omitted from the submitted catalog, so publishing works with Supabase REST's `pg_safeupdate` protection enabled. Do not disable that protection to work around an outdated schema; reapply the current schema instead.
 
-Both Supabase variables must be set together. Database errors are surfaced rather than silently falling back to seed/local data. The browser never receives the service-role key, and no hosted database is provisioned automatically.
+Ingestion: automated synchronizers (official APIs, documentation, provider feeds) should produce provider files or catalog drafts that go through the same validation and admin review before publishing.
 
-For a self-hosted local-file deployment, `AI_COMPARE_DATA_DIR` can point to a writable persistent directory (absolute or relative to the process working directory). Runtime catalog files are not traced into the production bundle. Local publication uses an atomic replacement and a filesystem lock; Supabase publication uses a transaction and a PostgreSQL advisory lock. The seed command is non-destructive when an existing catalog is present.
+### Deploying the full application to Vercel
 
-The app does not fetch external AI providers at runtime, send watchlist notification emails, or claim live trend/usage data. Release events and verified changes entered by an editor feed the watchlist; a future notification worker can consume those events without changing the UI's model data contract.
+Use Node.js 24.x. [vercel.json](vercel.json) selects the Next.js framework, runs functions in Frankfurt (`fra1`) near the database, and runs `npm run build:vercel`. Before compiling, this command checks the public canonical URL, independent admin credentials, the initialized Supabase catalog, and the newsletter/analytics tables. A Vercel deployment without a database is rejected rather than falling back to ephemeral local files.
+
+1. Sign into your Vercel account and link this working directory to a project with `npx vercel login` and `npx vercel link`. CLI deployments include the current working tree; committing or pushing is not required.
+2. Connect Supabase through [Vercel Marketplace](https://supabase.com/docs/guides/integrations/vercel-marketplace), or connect an existing Supabase project. Apply [supabase/schema.sql](supabase/schema.sql) in the SQL editor.
+3. Configure the Vercel project environment variables (for each deployment environment you use):
+   - `SUPABASE_URL` and **either** `SUPABASE_SECRET_KEY` (current Marketplace secret) **or** `SUPABASE_SERVICE_ROLE_KEY` (legacy server-only key).
+   - `ADMIN_PASSWORD` (16+ characters) and a different `ADMIN_SESSION_SECRET` (32+ characters). Use production-specific values rather than reusing your development credentials.
+   - `NEXT_PUBLIC_SITE_URL=https://your-project.vercel.app` or your actual custom-domain origin, without a path. This must be set before building because robots and public metadata use it.
+4. Seed the database non-destructively with `npm run db:seed`, using the same database environment variables locally. Existing catalogs are left intact; never use `--replace` against an existing production catalog without intentionally backing up and replacing its content.
+5. Run `npm run deploy:check`, then deploy the current working tree with `npx vercel --prod`. Verify the public homepage, models, comparisons, sitemaps, newsletter, and admin publishing.
+
+[.vercelignore](.vercelignore) allowlists only application/build files. Local environment files, `.data` (including subscriber lists and backups), `.git`, editor settings, tests, and session artifacts are not uploaded. Store credentials in Vercel's server environment settings, never in source code or chat.
+
+## SEO
+
+- Per-page titles, descriptions, canonical URLs, Open Graph and Twitter cards; dynamic OG images for models and comparisons.
+- JSON-LD: `WebSite` + search action, `BreadcrumbList`, `SoftwareApplication` (models), `Organization` (providers), `CollectionPage` + `ItemList`, and `FAQPage`.
+- Comparison canonicals are order-independent; only curated combinations (popular pairs and featured flagships) are indexable, others are `noindex, follow`. Filtered explore URLs are `noindex`.
+- Sitemap index at `/sitemap.xml` with `/sitemaps/{models,providers,comparisons,categories,content}.xml`, generated from the live catalog.
+- Real 404 status codes for unknown models, providers, and comparisons.
 
 ## Architecture
 
 | Area | Location |
 | --- | --- |
-| App Router pages and API routes | [src/app](src/app) |
-| Reusable product UI | [src/components](src/components) |
-| shadcn/ui primitives | [src/components/ui](src/components/ui) |
-| Provider/model/fact contracts | [src/lib/types.ts](src/lib/types.ts) |
-| Editable seed catalog | [src/data/catalog.ts](src/data/catalog.ts) |
-| Strict catalog validation | [src/lib/catalog-schema.ts](src/lib/catalog-schema.ts) |
-| Local/Supabase persistence | [src/lib/catalog-store.ts](src/lib/catalog-store.ts) |
-| Shared filters, search, sorting, finder | [src/lib/catalog.ts](src/lib/catalog.ts) |
-| Comparison row definitions | [src/lib/comparison.ts](src/lib/comparison.ts) |
-| Browser persistence and app state | [src/lib/browser-store.ts](src/lib/browser-store.ts), [src/components/app-provider.tsx](src/components/app-provider.tsx) |
-| Admin auth and bounded requests | [src/lib/admin-auth.ts](src/lib/admin-auth.ts), [src/lib/admin-http.ts](src/lib/admin-http.ts) |
+| Pages, route handlers, OG images, sitemaps | [src/app](src/app) |
+| Product UI | [src/components](src/components) |
+| Types and schema (with v1 → v2 migration) | [src/lib/types.ts](src/lib/types.ts), [src/lib/catalog-schema.ts](src/lib/catalog-schema.ts) |
+| Reference data | [src/data](src/data) |
+| Summaries, search, filters, collections, finder, calculator | [src/lib/catalog.ts](src/lib/catalog.ts) |
+| Comparison rows and generated summaries | [src/lib/comparison.ts](src/lib/comparison.ts), [src/lib/comparison-content.ts](src/lib/comparison-content.ts) |
+| Catalog persistence (local file / Supabase) | [src/lib/catalog-store.ts](src/lib/catalog-store.ts) |
+| Analytics, newsletter, waitlist storage | [src/lib/event-store.ts](src/lib/event-store.ts) |
 | Database schema | [supabase/schema.sql](supabase/schema.sql) |
-| Unit and browser tests | [tests](tests) |
+| Tests | [tests](tests) |
 
-Add model/provider records to the seed or studio, not UI components. Cards, filters, profiles, comparison rows, and the finder derive their content from the shared catalog. Popular comparison shortcuts select actual model versions from provider families; the comparison page itself is fully dynamic.
+Pages are server-rendered. The client receives a compact model index (for search, the comparison tray, and filters) instead of the full catalog; charts are lazy-loaded.
 
 ## Verification
 
@@ -134,29 +174,14 @@ npm test
 npm run build
 ```
 
-The included **AI Compare: production build** VS Code task runs the production build.
-
-For browser tests, start the application first:
+Browser tests (against a development/test instance — the admin tests temporarily edit and then restore the catalog):
 
 ```powershell
 npx playwright install chromium
-$env:PLAYWRIGHT_BASE_URL = "http://localhost:3001"
+$env:PLAYWRIGHT_BASE_URL = "http://localhost:3000"
 npm run test:e2e
 ```
 
-The Playwright suite covers discovery, filters, sorting, global keyboard search, two-to-four-model comparisons, swapping, link sharing, watchlist persistence, the finder, themes, company pages, invalid URLs, mobile layout, and protected admin publishing with conflict rejection.
-
-Authenticated browser tests load the private local admin password from `.env.local`; that test is skipped if credentials are not configured. It temporarily updates one model and restores the original catalog in a `finally` block. Run these tests only against a development/test instance, never a production catalog.
-
-For a production server:
-
-```powershell
-npm run build
-npm run start -- --port 3001
-```
-
-Supabase deployment requires your own project credentials and infrastructure validation. The local app and persistence can be tested without them.
-
 ## Branding
 
-Provider marks are used to identify their respective companies. They remain the property of their respective owners and do not imply endorsement. Local icon assets and their upstream attribution/license are in [public/logos](public/logos).
+Provider marks identify their companies, remain the property of their owners, and do not imply endorsement. Local icon assets and attribution are in [public/logos](public/logos).

@@ -1,0 +1,14 @@
+/*
+!src
+!src/**
+!public
+!public/**
+!scripts
+!scripts/**
+!package.json
+!package-lock.json
+!next.config.ts
+!tsconfig.json
+!postcss.config.mjs
+!components.json
+!vercel.json

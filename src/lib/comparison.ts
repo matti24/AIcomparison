@@ -1,9 +1,19 @@
-import { capabilityLabels, formatContext, formatDate, formatPrice, getModalities, getProvider, typeLabels } from "@/lib/catalog";
+import {
+  capabilityLabels,
+  categoryLabels,
+  formatDate,
+  formatPrice,
+  formatTokens,
+  getProvider,
+  opennessLabels,
+  statusLabels,
+} from "@/lib/catalog";
 import type { AIModel, Capability, Catalog, Fact, Source } from "@/lib/types";
 
 export interface ComparisonCell {
+  /** Raw value used for difference detection. */
   value: string | number | boolean | null;
-  display?: string;
+  display: string;
   source?: Source | null;
   note?: string;
 }
@@ -12,79 +22,125 @@ export interface ComparisonRow {
   key: string;
   label: string;
   help?: string;
+  /** Numeric rows may highlight an objective extreme; never a subjective "winner". */
+  highlight?: "lowest" | "highest";
   read: (model: AIModel) => ComparisonCell;
 }
 
-export interface ComparisonGroup {
+export interface ComparisonSection {
+  id: string;
   title: string;
   rows: ComparisonRow[];
 }
 
-function cell<T extends string | number | boolean>(fact: Fact<T>, display?: string): ComparisonCell {
-  return { value: fact.value, display, source: fact.source, note: fact.note };
+function fact<T extends string | number | boolean>(value: Fact<T>, display: (raw: T) => string): ComparisonCell {
+  return {
+    value: value.value,
+    display: value.value === null ? "Not disclosed" : display(value.value),
+    source: value.source,
+    note: value.note,
+  };
 }
 
-const capabilityRow = (key: Capability): ComparisonRow => ({
+const yesNo = (value: boolean) => (value ? "Yes" : "No");
+const tokens = (value: number) => `${formatTokens(value)} tokens`;
+
+const capability = (key: Capability, label = capabilityLabels[key], help?: string): ComparisonRow => ({
   key,
-  label: capabilityLabels[key],
-  read: (model) => cell(model.capabilities[key]),
+  label,
+  help,
+  read: (model) => fact(model.capabilities[key], yesNo),
 });
 
-export function comparisonGroups(catalog: Catalog): ComparisonGroup[] {
+export function comparisonSections(catalog: Pick<Catalog, "providers">): ComparisonSection[] {
   return [
     {
-      title: "The essentials",
+      id: "overview",
+      title: "Overview",
       rows: [
-        { key: "provider", label: "Provider", read: (model) => ({ value: getProvider(catalog, model.providerId).name }) },
-        { key: "version", label: "Model version", read: (model) => ({ value: model.version }) },
-        { key: "release", label: "Release date", read: (model) => cell(model.releaseDate, formatDate(model.releaseDate.value)) },
-        { key: "type", label: "Model type", read: (model) => ({ value: typeLabels[model.type] }) },
-        { key: "status", label: "Status", read: (model) => ({ value: model.status, display: model.status[0].toUpperCase() + model.status.slice(1) }) },
-        { key: "license", label: "License", help: "Open weights allow downloading model weights, but are not necessarily open-source. Check the source license for conditions.", read: (model) => cell(model.openness) },
+        { key: "provider", label: "Provider", read: (model) => { const name = getProvider(catalog, model.providerId).name; return { value: name, display: name }; } },
+        { key: "release", label: "Release date", read: (model) => fact(model.releaseDate, (value) => formatDate(value)) },
+        { key: "status", label: "Model status", read: (model) => ({ value: model.status, display: statusLabels[model.status] }) },
+        { key: "type", label: "Model type", read: (model) => { const value = model.categories.map((category) => categoryLabels[category]).join(", "); return { value, display: value }; } },
+        { key: "openness", label: "Open / proprietary", help: "Open weights let you download model weights; that is not always an open-source license.", read: (model) => fact(model.openness, (value) => opennessLabels[value]) },
+        { key: "license", label: "License", read: (model) => fact(model.license, (value) => value) },
+        { key: "cutoff", label: "Knowledge cutoff", read: (model) => fact(model.knowledgeCutoff, (value) => formatDate(value, "month")) },
       ],
     },
     {
-      title: "Pricing & access",
+      id: "pricing",
+      title: "Pricing",
       rows: [
-        { key: "input", label: "Input / 1M tokens", help: "USD for one million input tokens. Standard published tier; caching, tools, long context, and provider pricing may differ.", read: (model) => cell(model.pricing.input, formatPrice(model.pricing.input.value)) },
-        { key: "output", label: "Output / 1M tokens", help: "USD for one million generated tokens. Reasoning tokens may also be billed as output.", read: (model) => cell(model.pricing.output, formatPrice(model.pricing.output.value)) },
-        { key: "subscription", label: "Subscription / month", help: "Product-level subscription, when documented. A subscription is not an API plan or a guarantee of unlimited model access.", read: (model) => cell(model.pricing.subscription, formatPrice(model.pricing.subscription.value)) },
-        { key: "api", label: "API available", read: (model) => cell(model.apiAvailable) },
-        { key: "free", label: "Free access", help: "A documented free plan or access path. Usage limits and availability can change.", read: (model) => cell(model.freeAccess) },
+        { key: "input", label: "Input / 1M tokens", highlight: "lowest", help: "Standard published USD rate. Long-context, batch, priority, and regional tiers can differ.", read: (model) => fact(model.pricing.input, (value) => formatPrice(value)) },
+        { key: "cachedInput", label: "Cached input / 1M", highlight: "lowest", help: "Rate for prompt-cache hits where the provider publishes one.", read: (model) => fact(model.pricing.cachedInput, (value) => formatPrice(value)) },
+        { key: "output", label: "Output / 1M tokens", highlight: "lowest", help: "Reasoning tokens are typically billed as output.", read: (model) => fact(model.pricing.output, (value) => formatPrice(value)) },
+        { key: "other", label: "Other pricing", help: "Non-token pricing (per image, per second, per minute) quoted verbatim.", read: (model) => fact(model.pricing.other, (value) => value) },
       ],
     },
     {
-      title: "Context & performance",
+      id: "context",
+      title: "Context",
       rows: [
-        { key: "context", label: "Context window", help: "Maximum tokens in a request, usually shared between input and output. Deployment and pricing tiers may change the limit.", read: (model) => cell(model.contextWindow, `${formatContext(model.contextWindow.value)}${model.contextWindow.value === null ? "" : " tokens"}`) },
-        { key: "outputLimit", label: "Maximum output", read: (model) => cell(model.maxOutput, `${formatContext(model.maxOutput.value)}${model.maxOutput.value === null ? "" : " tokens"}`) },
-        { key: "cutoff", label: "Knowledge cutoff", read: (model) => cell(model.knowledgeCutoff) },
-        { key: "speed", label: "Speed category", help: "Only shown when a reliable source supports the category. This is not a standardized latency benchmark.", read: (model) => cell(model.speed) },
-        capabilityRow("reasoning"),
-        capabilityRow("coding"),
-        capabilityRow("multilingual"),
+        { key: "context", label: "Context window", highlight: "highest", help: "Maximum tokens per request, usually shared between input and output.", read: (model) => fact(model.contextWindow, tokens) },
+        { key: "maxOutput", label: "Maximum output", highlight: "highest", read: (model) => fact(model.maxOutput, tokens) },
       ],
     },
     {
-      title: "Modalities & creation",
+      id: "capabilities",
+      title: "Capabilities",
       rows: [
-        { key: "modalities", label: "Supported modalities", read: (model) => ({ value: getModalities(model).join(", ") || null }) },
-        ...(["text", "imageInput", "imageOutput", "audioInput", "audioOutput", "videoInput", "videoOutput"] as const).map(capabilityRow),
+        capability("reasoning"),
+        capability("toolCalling"),
+        capability("webSearch", "Web search", "Usually an optional, separately billed tool."),
+        capability("computerUse"),
+        capability("structuredOutputs"),
+        capability("coding"),
+        capability("multilingual"),
       ],
     },
     {
-      title: "Build & deploy",
+      id: "multimodal",
+      title: "Multimodal",
       rows: [
-        capabilityRow("webSearch"),
-        capabilityRow("toolCalling"),
-        capabilityRow("structuredOutputs"),
-        capabilityRow("fineTuning"),
-        capabilityRow("selfHosting"),
+        capability("text", "Text"),
+        capability("imageInput", "Image input"),
+        capability("imageOutput", "Image generation"),
+        capability("imageEditing", "Image editing"),
+        capability("videoInput", "Video input"),
+        capability("videoOutput", "Video generation"),
+        capability("audioInput", "Audio input"),
+        capability("audioOutput", "Audio output"),
+        capability("realtime", "Realtime"),
+      ],
+    },
+    {
+      id: "api",
+      title: "API & developer",
+      rows: [
+        { key: "api", label: "API available", read: (model) => fact(model.apiAvailable, yesNo) },
+        { key: "free", label: "Free access", read: (model) => fact(model.freeAccess, yesNo) },
+        capability("fineTuning"),
+        capability("batchApi", "Batch API"),
+        capability("embeddings", "Embeddings"),
+        capability("selfHosting", "Self-hosting"),
+        { key: "languages", label: "Languages", read: (model) => fact(model.languages, (value) => value) },
+        { key: "version", label: "API model ID", read: (model) => ({ value: model.version, display: model.version }) },
       ],
     },
   ];
 }
 
 export function rowIsDifferent(row: ComparisonRow, models: AIModel[]) {
-  return new Set(models.map((model) => row.read(model).value)).size > 1;
+  return new Set(models.map((model) => JSON.stringify(row.read(model).value))).size > 1;
+}
+
+/** Indices of models holding the objective numeric extreme for a highlighted row. */
+export function highlightedIndices(row: ComparisonRow, models: AIModel[]) {
+  if (!row.highlight) return [];
+  const values = models.map((model) => row.read(model).value);
+  const numbers = values.filter((value): value is number => typeof value === "number");
+  if (numbers.length < 2) return [];
+  const target = row.highlight === "lowest" ? Math.min(...numbers) : Math.max(...numbers);
+  if (numbers.every((value) => value === target)) return [];
+  return values.flatMap((value, index) => (value === target ? [index] : []));
 }

@@ -28,3 +28,27 @@ are needed at runtime.
 The MIT license covers the icon artwork distribution. Provider names and marks
 remain the property of their respective owners; use here identifies providers
 and does not imply endorsement or confer trademark rights.
+
+Added 2026-10-01 from the same source commit:
+bytedance.svg              bytedance-color.svg
+moonshot.svg               kimi-color.svg
+zai.svg                    zai.svg
+minimax.svg                minimax-color.svg
+baidu.svg                  baidu-color.svg
+tencent.svg                hunyuan-color.svg
+huawei.svg                 huawei-color.svg
+stability-ai.svg           stability-color.svg
+midjourney.svg             midjourney.svg
+elevenlabs.svg             elevenlabs.svg
+suno.svg                   suno.svg
+kuaishou.svg               kling-color.svg
+ideogram.svg               ideogram.svg
+recraft.svg                recraft.svg
+together.svg               together-color.svg
+groq.svg                   groq.svg
+cerebras.svg               cerebras-color.svg
+fireworks.svg              fireworks-color.svg
+openrouter.svg             openrouter.svg
+nvidia.svg                 nvidia-color.svg
+amazon.svg                 aws-color.svg
+ai21.svg                   ai21.svg

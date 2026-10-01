@@ -1,11 +1,13 @@
 import { expect, test, type Page } from "@playwright/test";
 import { z } from "zod";
 import { seedCatalog } from "../../src/data/catalog";
-import { comparisonPath, getProvider, sortModels } from "../../src/lib/catalog";
 import { newModelTemplate, newProviderTemplate } from "../../src/lib/admin-templates";
+import { comparisonPath, modelPath, popularComparisons, searchModels, sortModels, summarizeCatalog } from "../../src/lib/catalog";
 import { catalogSchema } from "../../src/lib/catalog-schema";
 
-const models = sortModels(seedCatalog.models.filter((model) => model.status !== "deprecated"), "featured");
+// Tests run against a development/test instance whose catalog matches the reference seed.
+const { models: summaries, providers } = summarizeCatalog(seedCatalog);
+const featured = sortModels(summaries.filter((model) => model.status === "active"), "featured");
 
 async function browserRequest(page: Page, path: string, method = "GET", data?: unknown) {
   return page.evaluate(async (options) => {
@@ -26,301 +28,296 @@ async function readBrowserCatalog(page: Page) {
   return z.object({ catalog: catalogSchema }).parse(response.body).catalog;
 }
 
-test("homepage is a complete, branded discovery experience", async ({ page }) => {
+async function signInAdmin(page: Page) {
+  await page.goto("/admin");
+  await page.getByLabel("Admin password", { exact: true }).fill(process.env.ADMIN_PASSWORD!);
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Catalog studio" })).toBeVisible();
+  await expect(page.getByText("Draft matches the published catalog.")).toBeVisible();
+}
+
+test.beforeEach(async ({ page }) => {
+  // Decline analytics so the consent banner does not cover content.
+  await page.addInitScript(() => localStorage.setItem("ai-compare:consent:v1", "denied"));
+});
+
+test("homepage communicates the product with live catalog numbers and sourced trends", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto("/");
-  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Compare the world'sleading AI models.");
-  await expect(page.getByRole("link", { name: "Compare Models", exact: true })).toBeVisible();
-  await expect(page.getByTestId("model-card")).toHaveCount(Math.min(6, models.filter((model) => model.editorial.trending).length));
-  await expect(page.getByRole("heading", { name: "There's an AI for that. Let's find yours." })).toBeVisible();
-  await page.getByRole("tab", { name: "Top coding" }).click();
-  await expect(page.getByRole("tab", { name: "Top coding" })).toHaveAttribute("aria-selected", "true");
-  await page.getByRole("tab", { name: "Recently released" }).click();
-  await expect(page.getByTestId("model-card")).toHaveCount(Math.min(6, models.length));
+  await expect(page.getByText("The AI model database", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Compare the world's leading AI models");
+  await expect(page.getByRole("searchbox").or(page.getByLabel("Search AI models"))).toBeVisible();
+  await expect(page.getByRole("link", { name: "Compare Models" })).toHaveAttribute("href", "/compare");
+  await expect(page.getByRole("link", { name: "Explore Models" })).toHaveAttribute("href", "/models");
+  await expect(page.locator(".trust-line")).toContainText(`Tracking ${seedCatalog.models.length} AI models across ${seedCatalog.providers.length} providers`);
+  await expect(page.getByRole("heading", { name: "Trending now" })).toBeVisible();
+  const trendCards = page.locator("ul[aria-labelledby='trending'] > li");
+  expect(await trendCards.count()).toBeGreaterThan(0);
+  await expect(trendCards.first().locator("a[target='_blank']")).toHaveAttribute("href", /^https?:\/\//);
+  await expect(page.getByRole("heading", { name: "Popular comparisons" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Recently released" })).toBeVisible();
   expect(errors).toEqual([]);
 });
 
-test("directory filters, search, sorting, table mode and empty states work", async ({ page }) => {
+test("explore filters, intent search, URL state, table view, and empty states", async ({ page }) => {
   await page.goto("/models");
-  await expect(page.getByTestId("model-card")).toHaveCount(seedCatalog.models.length);
-  await page.getByRole("textbox", { name: "Search models in directory" }).fill("models with video");
-  const videos = seedCatalog.models.filter((model) => model.capabilities.videoInput.value === true || model.capabilities.videoOutput.value === true);
-  await expect(page.getByTestId("model-card")).toHaveCount(videos.length);
-  await page.getByRole("button", { name: "Table view", exact: true }).click();
-  await expect(page.locator("table tbody tr")).toHaveCount(videos.length);
-  await page.getByRole("button", { name: "Card view", exact: true }).click();
-  await page.getByRole("textbox", { name: "Search models in directory" }).fill("this-model-cannot-possibly-exist");
-  await expect(page.getByRole("heading", { name: "No models in this corner. Yet." })).toBeVisible();
-  await page.getByRole("button", { name: "Clear all filters" }).click();
-  await expect(page.getByTestId("model-card")).toHaveCount(seedCatalog.models.length);
-  const provider = getProvider(seedCatalog, models[0].providerId);
-  await page.getByLabel(provider.name, { exact: true }).check();
-  await expect(page.getByTestId("model-card")).toHaveCount(seedCatalog.models.filter((model) => model.providerId === provider.id).length);
-  await page.getByRole("combobox", { name: "Sort models" }).selectOption("cheapest");
+  const search = page.getByRole("searchbox", { name: "Search models" });
+  await search.fill("cheap coding");
+  const expected = searchModels(summaries.filter((model) => model.status !== "retired"), providers, "cheap coding").results.length;
+  await expect(page.getByRole("status")).toContainText(`${expected}`);
+  await expect(page).toHaveURL(/q=cheap\+coding|q=cheap%20coding/);
+  await expect(page.getByText("Input under $1/1M", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "Table view" }).click();
+  await expect(page).toHaveURL(/view=table/);
+  await expect(page.locator("table tbody tr")).toHaveCount(expected);
+
+  await search.fill("this-model-cannot-possibly-exist");
+  await expect(page.getByRole("heading", { name: "No models match these filters." })).toBeVisible();
+  await page.getByRole("button", { name: "Clear filters" }).click();
+  await expect(search).toHaveValue("");
+
+  await page.getByRole("button", { name: "Grid view" }).click();
+  const openai = providers.find((provider) => provider.id === "openai")!;
+  await page.locator("aside.filters").getByRole("checkbox", { name: new RegExp(`^${openai.name}`) }).check();
+  await expect(page).toHaveURL(/provider=openai/);
+  const cards = page.getByTestId("model-card");
+  await expect(cards.first()).toContainText("OpenAI");
+
   await page.reload();
-  await expect(page.getByLabel(provider.name, { exact: true })).toBeChecked();
-  await expect(page.getByRole("combobox", { name: "Sort models" })).toHaveValue("cheapest");
+  await expect(page.locator("aside.filters").getByRole("checkbox", { name: new RegExp(`^${openai.name}`) })).toBeChecked();
 });
 
-test("global search works by keyboard and navigates to a model", async ({ page }) => {
-  await page.goto("/");
-  await page.getByRole("button", { name: "Search models and companies" }).click();
+test("command palette opens with keyboard shortcuts and understands comparisons", async ({ page }) => {
+  await page.goto("/", { waitUntil: "networkidle" });
+  await page.keyboard.press("Control+K");
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  await page.keyboard.type("claude vs gemini");
+  await expect(dialog.getByRole("option").first()).toContainText(" vs ");
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(/\/compare\/.+-vs-.+/);
+
+  await page.locator("body").click({ position: { x: 5, y: 300 } });
+  await page.keyboard.press("/");
   await expect(page.getByRole("dialog")).toBeVisible();
-  await page.keyboard.press("Escape");
-  await expect(page.getByRole("button", { name: "Search models and companies" })).toBeFocused();
-  await page.keyboard.press("Control+k");
-  await expect(page.getByRole("dialog")).toBeVisible();
-  await page.getByRole("textbox", { name: "Search models, companies, or capabilities" }).fill(models[0].name);
-  await page.getByRole("dialog").getByRole("button", { name: new RegExp(models[0].name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")) }).first().click();
-  await expect(page).toHaveURL(`/models/${models[0].slug}`);
-  await expect(page.getByRole("heading", { level: 1 })).toHaveText(models[0].name);
-  await expect(page).toHaveTitle(new RegExp("Pricing, Context Window"));
+  await page.keyboard.type(featured[0].name);
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(new RegExp(`${featured[0].path}$`));
 });
 
-test("discovery tabs and model-picker dialogs are keyboard accessible", async ({ page }) => {
-  await page.goto("/");
-  const firstTab = page.getByRole("tab", { name: "Trending", exact: true });
-  await firstTab.click();
-  await firstTab.focus();
-  await page.keyboard.press("ArrowRight");
-  await expect(page.getByRole("tab", { name: "Recently released", exact: true })).toBeFocused();
-  await expect(page.getByRole("tab", { name: "Recently released", exact: true })).toHaveAttribute("aria-selected", "true");
-  await page.keyboard.press("End");
-  await expect(page.getByRole("tab", { name: "Open models", exact: true })).toBeFocused();
-  await page.goto("/compare");
-  const add = page.getByRole("button", { name: "Add model 1", exact: true });
-  await add.click();
-  await expect(page.getByRole("textbox", { name: "Search models to compare" })).toBeFocused();
-  await page.keyboard.press("Escape");
-  await expect(add).toBeFocused();
+test("compare tray persists across navigation and enforces four models", async ({ page }) => {
+  await page.goto("/models");
+  const checkboxes = page.getByTestId("model-card").getByRole("checkbox");
+  await checkboxes.nth(0).check();
+  await checkboxes.nth(1).check();
+  const tray = page.getByRole("complementary", { name: "Comparison tray" });
+  await expect(tray).toBeVisible();
+  await expect(tray.getByRole("link", { name: /Compare 2/ })).toBeVisible();
+  await page.goto("/providers");
+  await expect(tray).toBeVisible();
+  await page.goto("/models");
+  await checkboxes.nth(2).check();
+  await checkboxes.nth(3).check();
+  await checkboxes.nth(4).click();
+  await expect(page.getByText("Comparison is full")).toBeVisible();
+  await tray.getByRole("link", { name: /Compare 4/ }).click();
+  await expect(page).toHaveURL(/\/compare\/.+-vs-.+-vs-.+-vs-.+/);
 });
 
-test("comparison builder selects 2-4 models and produces a shareable link", async ({ page, context }) => {
+test("comparison page: sticky sections, differences, highlights, removal, and canonical metadata", async ({ page, context }) => {
+  const pair = popularComparisons(summaries)[0];
+  const path = comparisonPath(pair.models.map((model) => model.slug));
+  await page.goto(path);
+  await expect(page.getByRole("heading", { level: 1 })).toContainText(pair.models[0].name);
+  await expect(page.getByRole("navigation", { name: "Comparison sections" })).toBeVisible();
+  const canonical = await page.locator("link[rel='canonical']").getAttribute("href");
+  expect(canonical).toContain(comparisonPath([...pair.models.map((model) => model.slug)].sort()));
+  await expect(page.getByRole("rowheader", { name: /Input \/ 1M tokens/ })).toBeVisible();
+
+  const rowsBefore = await page.locator(".cmp-body .cmp-row").count();
+  await page.getByLabel("Show differences only").check();
+  expect(await page.locator(".cmp-body .cmp-row").count()).toBeLessThan(rowsBefore);
+  await expect(page.getByRole("heading", { name: "Frequently asked questions" })).toBeVisible();
+  await expect(page.getByText("Neither is universally better", { exact: false })).toBeVisible();
+
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
-  await page.goto("/compare");
-  await page.getByRole("button", { name: "Add model 1", exact: true }).click();
-  await page.getByRole("dialog").getByRole("textbox").fill(models[0].name);
-  await page.getByRole("dialog").locator("button.search-result").first().click();
-  await page.getByRole("button", { name: "Add model 2", exact: true }).click();
-  await page.getByRole("dialog").getByRole("textbox").fill(models[1].name);
-  await page.getByRole("dialog").locator("button.search-result").first().click();
-  await page.getByRole("link", { name: "Compare 2 models", exact: true }).click();
-  await expect(page).toHaveURL(comparisonPath([models[0].slug, models[1].slug]));
-  await expect(page.locator(".desktop-comparison .comparison-model-header")).toHaveCount(2);
-  const allRows = await page.locator(".desktop-comparison .comparison-data-row").count();
-  await page.getByRole("button", { name: /Show Differences Only/ }).click();
-  const differenceRows = await page.locator(".desktop-comparison .comparison-data-row").count();
-  expect(differenceRows).toBeLessThan(allRows);
-  await page.getByRole("button", { name: "Copy Comparison Link", exact: true }).click();
-  const copied = await page.evaluate(() => navigator.clipboard.readText());
-  expect(copied).toContain(comparisonPath([models[0].slug, models[1].slug]));
-  await page.getByRole("button", { name: "Add Model", exact: true }).click();
-  await page.getByRole("dialog").getByRole("textbox").fill(models[2].name);
-  await page.getByRole("dialog").locator("button.search-result").first().click();
-  await expect(page).toHaveURL(comparisonPath([models[0].slug, models[1].slug, models[2].slug]));
-  await page.getByRole("button", { name: "Add Model", exact: true }).click();
-  await page.getByRole("dialog").getByRole("textbox").fill(models[3].name);
-  await page.getByRole("dialog").locator("button.search-result").first().click();
-  await expect(page).toHaveURL(comparisonPath(models.slice(0, 4).map((model) => model.slug)));
-  await expect(page.locator(".desktop-comparison .comparison-model-header")).toHaveCount(4);
-  await expect(page.getByRole("button", { name: "Add Model", exact: true })).toBeDisabled();
+  await page.getByRole("button", { name: "Copy link" }).click();
+  await expect(page.getByText("Link copied")).toBeVisible();
+
+  await page.getByRole("button", { name: "Add model" }).click();
+  await page.keyboard.type(featured.find((model) => !pair.models.some((entry) => entry.slug === model.slug))!.name);
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await page.getByRole("button", { name: `Remove ${pair.models[0].name}` }).click();
+  await expect(page).not.toHaveURL(new RegExp(pair.models[0].slug));
+});
+
+test("model profiles show sources, calculator, versions, and keep legacy URLs working", async ({ page }) => {
+  const model = seedCatalog.models.find((entry) => entry.id === "gpt-6-1-sol")!;
+  await page.goto("/models/gpt-6-1-sol");
+  await expect(page).toHaveURL(modelPath("openai", "gpt-6-1-sol"));
+  await expect(page.getByRole("heading", { level: 1 })).toContainText(model.name);
+  await expect(page.getByRole("heading", { name: "Sources" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "API cost calculator" })).toBeVisible();
+  await expect(page.getByText("Pricing last verified", { exact: false })).toBeVisible();
+  await page.getByRole("button", { name: "Favorite", exact: true }).click();
   await page.reload();
-  await expect(page.locator(".desktop-comparison .comparison-model-header")).toHaveCount(4);
+  await expect(page.getByRole("button", { name: "Saved", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await page.goto("/favorites");
+  await expect(page.getByTestId("model-card")).toHaveCount(1);
+  const outbound = await page.request.get(`/go/model/${model.id}`, { maxRedirects: 0 });
+  expect(outbound.status()).toBe(302);
+  expect(outbound.headers().location).toContain("utm_source=aicompare");
 });
 
-test("comparison swapping and removal update the URL", async ({ page }) => {
-  await page.goto(comparisonPath(models.slice(0, 3).map((model) => model.slug)));
-  await page.locator(".desktop-comparison").getByRole("button", { name: `Swap ${models[0].name}`, exact: true }).click();
-  await page.getByRole("dialog").getByRole("textbox").fill(models[3].name);
-  await page.getByRole("dialog").locator("button.search-result").first().click();
-  await expect(page).toHaveURL(comparisonPath([models[3].slug, models[1].slug, models[2].slug]));
-  await page.locator(".desktop-comparison").getByRole("button", { name: `Remove ${models[2].name} from comparison`, exact: true }).click();
-  await expect(page).toHaveURL(comparisonPath([models[3].slug, models[1].slug]));
-  await expect(page.locator(".desktop-comparison .comparison-model-header")).toHaveCount(2);
+test("AI finder walks four steps and explains every match", async ({ page }) => {
+  await page.goto("/ai-finder");
+  for (const answer of ["Coding", "Low API cost", "Yes", "No preference"]) {
+    await page.getByRole("radio", { name: new RegExp(`^${answer.replace(/[()]/g, "\\$&")}`) }).click();
+  }
+  await expect(page.getByRole("heading", { name: /models match your answers/ })).toBeVisible();
+  const cards = page.getByTestId("model-card");
+  expect(await cards.count()).toBeGreaterThanOrEqual(3);
+  await expect(cards.first()).toContainText("Why it matches");
+  await page.getByRole("button", { name: "Start over" }).click();
+  await expect(page.getByText("Step 1 of 4")).toBeVisible();
 });
 
-test("floating comparison bar and maximum selection work", async ({ page }) => {
-  await page.goto("/models");
-  for (const model of models.slice(0, 4)) await page.getByRole("button", { name: `Add ${model.name} to comparison`, exact: true }).click();
-  await expect(page.getByRole("complementary", { name: "Selected models for comparison" })).toBeVisible();
-  await page.getByRole("button", { name: `Add ${models[4].name} to comparison`, exact: true }).click();
-  await expect(page.getByText("Your comparison is full", { exact: true })).toBeVisible();
-  await expect(page.locator(".compare-bar-chip")).toHaveCount(4);
-  await page.getByRole("button", { name: "Clear", exact: true }).click();
-  await expect(page.locator(".compare-bar")).toHaveCount(0);
+test("release feed, benchmarks, providers, and calculator render real data", async ({ page }) => {
+  await page.goto("/releases");
+  await expect(page.locator(".feed-entry").first()).toBeVisible();
+  await page.getByRole("button", { name: "Deprecation" }).click();
+  await expect(page.locator(".feed-entry .badge-deprecated").first()).toBeVisible();
+
+  await page.goto("/benchmarks");
+  await expect(page.getByRole("heading", { level: 2 }).first()).toBeVisible();
+  await expect(page.getByText("Provider-reported", { exact: true }).first()).toBeVisible();
+
+  await page.goto("/providers/openai");
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("OpenAI");
+  await expect(page.getByRole("heading", { name: "Timeline" })).toBeVisible();
+
+  await page.goto("/pricing-calculator");
+  await page.getByLabel("Requests / day").fill("10000");
+  await expect(page.getByText("300,000 requests/month", { exact: false })).toBeVisible();
 });
 
-test("watchlist and recently viewed models persist after refresh", async ({ page }) => {
-  await page.goto(`/models/${models[0].slug}`);
-  await page.getByRole("button", { name: `Save ${models[0].name} to watchlist`, exact: true }).click();
-  await page.goto("/watchlist");
-  await expect(page.getByText("1 saved model", { exact: true })).toBeVisible();
-  await page.reload();
-  await expect(page.getByText("1 saved model", { exact: true })).toBeVisible();
-  await page.getByRole("tab", { name: "Release & update history" }).click();
-  if (models[0].releases.length) await expect(page.locator(".watchlist-update")).toHaveCount(models[0].releases.length);
+test("newsletter validates email and SEO endpoints are complete", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "Pick up where you left off." })).toBeVisible();
+  const form = page.locator("footer form");
+  await form.getByLabel("Email address").fill("not-an-email");
+  await form.getByRole("button", { name: "Subscribe" }).click();
+  await expect(form.getByRole("alert")).toBeVisible();
+
+  const index = await (await page.request.get("/sitemap.xml")).text();
+  for (const name of ["models", "providers", "comparisons", "categories", "content"]) expect(index).toContain(`/sitemaps/${name}.xml`);
+  const modelsMap = await (await page.request.get("/sitemaps/models.xml")).text();
+  expect(modelsMap).toContain(modelPath("openai", "gpt-6-1-sol"));
+  const robots = await (await page.request.get("/robots.txt")).text();
+  expect(robots).toContain("Disallow: /admin");
+  await page.goto("/models/coding");
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("AI models for coding");
+  expect(await page.locator("script[type='application/ld+json']").count()).toBeGreaterThan(0);
 });
 
-test("finder explains matches and supports starting again", async ({ page }) => {
-  await page.goto("/finder");
-  await expect(page.getByRole("button", { name: "Next, your priorities" })).toBeDisabled();
-  await page.getByRole("button", { name: "Coding Ship, debug, and build things", exact: true }).click();
-  await page.getByRole("button", { name: "Next, your priorities" }).click();
-  await page.getByRole("button", { name: "API access A model you can build into your app", exact: true }).click();
-  await page.getByRole("button", { name: "Find my matches" }).click();
-  await expect(page.getByRole("heading", { name: "A few good fits. Here's why." })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Why this could work for you" }).first()).toBeVisible();
-  await page.getByRole("button", { name: "Start again" }).click();
-  await expect(page.getByRole("heading", { name: "What do you mainly need AI for?" })).toBeVisible();
+test("invalid links render a non-indexed not-found page", async ({ page }) => {
+  for (const path of ["/models/openai/not-a-real-model", "/compare/not-real-vs-also-not-real", "/providers/not-a-provider"]) {
+    const response = await page.goto(path);
+    expect(response?.status()).toBe(404);
+    await expect(page.getByRole("heading", { name: "Page not found" })).toBeVisible();
+  }
 });
 
-test("theme toggle persists and company profiles distinguish products from models", async ({ page }) => {
-  await page.goto("/");
-  await page.getByRole("button", { name: "Toggle color theme" }).click();
-  await expect(page.locator("html")).toHaveClass(/dark/);
-  await page.reload();
-  await expect(page.locator("html")).toHaveClass(/dark/);
-  const provider = getProvider(seedCatalog, models[0].providerId);
-  await page.goto(`/companies/${provider.slug}`);
-  await expect(page.getByRole("heading", { level: 1 })).toHaveText(provider.name);
-  await expect(page.getByRole("heading", { name: "Explore the model family." })).toBeVisible();
-  if (provider.products.length) await expect(page.getByRole("heading", { name: "The products. Not the model versions." })).toBeVisible();
-});
-
-test("invalid model and comparison links show a non-indexable not-found state", async ({ page }) => {
-  for (const path of ["/models/does-not-exist", `/compare/${models[0].slug}-vs-${models[0].slug}`, "/compare/missing-vs-missing-too", "/companies/does-not-exist"]) {
+test("mobile layouts have no horizontal overflow and use drawers", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  for (const path of ["/", "/models", "/compare", comparisonPath(featured.slice(0, 2).map((model) => model.slug)), featured[0].path, "/releases", "/benchmarks"]) {
     await page.goto(path);
-    await expect(page.getByRole("heading", { name: "Not every path leads to a model." })).toBeVisible();
-    await expect(page.locator('meta[name="robots"]').first()).toHaveAttribute("content", /noindex/);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), path).toBe(true);
   }
-});
-
-test("mobile navigation, filters and comparison cards fit the viewport", async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto("/");
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-  for (const button of await page.locator(".hero-actions a").all()) {
-    const bounds = await button.boundingBox();
-    expect(bounds).not.toBeNull();
-    expect(bounds!.x).toBeGreaterThanOrEqual(0);
-    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390);
-  }
-  const contentBounds = await page.locator(".hero-grid").boundingBox();
-  const searchBounds = await page.locator(".hero-search").boundingBox();
-  expect(searchBounds!.x + searchBounds!.width).toBeLessThanOrEqual(contentBounds!.x + contentBounds!.width + 1);
+  await page.goto("/models");
+  await page.getByRole("button", { name: /^Filters/ }).click();
+  await expect(page.getByRole("dialog", { name: "Filters" })).toBeVisible();
+  await page.getByRole("button", { name: /^Show \d+ results$/ }).click();
   await page.getByRole("button", { name: "Open navigation menu" }).click();
-  await page.getByRole("navigation", { name: "Mobile navigation" }).getByRole("link", { name: "Models", exact: true }).click();
-  await page.getByRole("button", { name: "Filters", exact: true }).click();
-  await expect(page.getByRole("dialog")).toBeVisible();
-  await page.getByRole("dialog").getByLabel("API available", { exact: true }).check();
-  await page.getByRole("button", { name: /Show \d+ models/ }).click();
-  await expect(page.getByTestId("model-card")).toHaveCount(seedCatalog.models.filter((model) => model.apiAvailable.value === true).length);
-  await page.goto(comparisonPath(models.slice(0, 3).map((model) => model.slug)));
-  await expect(page.locator(".mobile-comparison")).toBeVisible();
-  await expect(page.locator(".mobile-comparison-card")).toHaveCount(3);
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-  const track = page.locator(".mobile-comparison-track");
-  await track.evaluate((element) => element.scrollTo({ left: 390, behavior: "instant" }));
-  expect(await track.evaluate((element) => element.scrollLeft)).toBeGreaterThan(0);
+  await expect(page.getByRole("navigation", { name: "Mobile" })).toBeVisible();
 });
 
-test("admin denies unauthenticated writes and cross-origin login", async ({ request, baseURL }) => {
-  const read = await request.get("/api/admin/catalog");
-  expect(read.status()).toBe(401);
-  const mutation = await request.put("/api/admin/catalog", { headers: { origin: baseURL! }, data: {} });
-  expect(mutation.status()).toBe(401);
+test("admin denies unauthenticated access and cross-origin login", async ({ request, baseURL }) => {
+  expect((await request.get("/api/admin/catalog")).status()).toBe(401);
+  expect((await request.get("/api/admin/analytics")).status()).toBe(401);
+  expect((await request.get("/api/admin/subscribers")).status()).toBe(401);
+  expect((await request.put("/api/admin/catalog", { headers: { origin: baseURL! }, data: {} })).status()).toBe(401);
   const crossOrigin = await request.post("/api/admin/session", { headers: { origin: "https://untrusted.example" }, data: { password: "not-a-real-password" } });
   expect(crossOrigin.status()).toBe(403);
 });
 
-test("admin validates, publishes persistently and rejects stale writes", async ({ page }) => {
+test("admin publishes edits with updated_by and rejects stale writes", async ({ page }) => {
   test.skip(!process.env.ADMIN_PASSWORD, "Set up private admin credentials before running the authenticated admin workflow.");
-  await page.goto("/admin");
-  await page.getByLabel("Admin password", { exact: true }).fill(process.env.ADMIN_PASSWORD!);
-  await page.getByRole("button", { name: "Open the studio" }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "The catalog studio." })).toBeVisible();
-  await expect(page.getByText("The catalog is up to date.")).toBeVisible();
+  await signInAdmin(page);
   const original = await readBrowserCatalog(page);
+  const target = featured[0];
   try {
-    await page.getByRole("textbox", { name: "Search catalog records" }).fill(models[0].name);
-    const row = page.getByRole("row").filter({ hasText: models[0].name }).first();
-    await row.getByRole("button", { name: "Details", exact: true }).click();
+    await page.getByRole("tab", { name: /Models/ }).click();
+    await page.getByRole("textbox", { name: "Filter records" }).fill(target.name);
+    await page.getByRole("row").filter({ hasText: target.name }).first().getByRole("button", { name: "Details", exact: true }).click();
     const json = page.getByRole("textbox", { name: "Record JSON" });
     const model = JSON.parse(await json.inputValue());
     model.description = "A test-verified catalog update. Restored after the end-to-end test.";
     await json.fill(JSON.stringify(model, null, 2));
     await page.getByRole("button", { name: "Validate & apply" }).click();
-    await expect(page.getByText("You have unpublished changes.")).toBeVisible();
+    await expect(page.getByText("Unpublished changes in your draft.")).toBeVisible();
     await page.getByRole("button", { name: "Publish catalog", exact: true }).click();
-    await expect(page.getByText("The catalog is up to date.")).toBeVisible();
+    await expect(page.getByText("Draft matches the published catalog.")).toBeVisible();
     const published = await readBrowserCatalog(page);
-    expect(published.models.find((item) => item.slug === model.slug)?.description).toBe(model.description);
+    const saved = published.models.find((item) => item.slug === model.slug)!;
+    expect(saved.description).toBe(model.description);
+    expect(saved.updatedBy).toBe("admin");
     const stale = await browserRequest(page, "/api/admin/catalog", "PUT", { catalog: original, expectedUpdatedAt: original.updatedAt });
     expect(stale.status).toBe(409);
-    const publicPage = await page.request.get(`/models/${model.slug}`);
-    expect(await publicPage.text()).toContain(model.description);
-    const invalid = await browserRequest(page, "/api/admin/catalog", "PUT", { catalog: { ...published, models: [...published.models, published.models[0]] }, expectedUpdatedAt: published.updatedAt });
-    expect(invalid.status).toBe(422);
+    expect(await (await page.request.get(target.path)).text()).toContain(model.description);
   } finally {
     const latest = await readBrowserCatalog(page);
     const restored = await browserRequest(page, "/api/admin/catalog", "PUT", { catalog: original, expectedUpdatedAt: latest.updatedAt });
     expect(restored.status).toBe(200);
   }
-  await page.reload();
-  await page.getByRole("button", { name: "Sign out" }).click();
-  await expect(page.getByLabel("Admin password", { exact: true })).toBeVisible();
 });
 
-test("admin can add a provider and model version with pricing, capabilities, benchmarks and releases", async ({ page }) => {
+test("admin can add a provider and a sourced model that appears publicly", async ({ page }) => {
   test.skip(!process.env.ADMIN_PASSWORD, "Private admin credentials are required for the record-creation workflow.");
-  await page.goto("/admin");
-  await page.getByLabel("Admin password", { exact: true }).fill(process.env.ADMIN_PASSWORD!);
-  await page.getByRole("button", { name: "Open the studio" }).click();
-  await expect(page.getByText("The catalog is up to date.")).toBeVisible();
+  await signInAdmin(page);
   const original = await readBrowserCatalog(page);
   const now = new Date().toISOString();
   const source = { label: "Explicit end-to-end test fixture (not model data)", url: "https://example.com/test-fixture", checkedAt: now };
-  const provider = {
-    ...newProviderTemplate(original, now),
-    id: "e2e-provider", slug: "e2e-provider", name: "E2E Test Provider",
-    website: "https://example.com", sources: [source],
-  };
+  const provider = { ...newProviderTemplate(original, now), id: "e2e-provider", slug: "e2e-provider", name: "E2E Test Provider", website: "https://example.com", sources: [source] };
   const model = {
     ...newModelTemplate(original, now),
-    id: "e2e-model-v1", slug: "e2e-model-v1", name: "E2E Test Model v1",
-    providerId: provider.id, website: "https://example.com/test-fixture",
-    description: "A temporary end-to-end test fixture, not a real AI model.",
+    id: "e2e-model-v1", slug: "e2e-model-v1", name: "E2E Test Model v1", providerId: provider.id,
+    website: "https://example.com/test-fixture", description: "A temporary end-to-end test fixture, not a real AI model.",
   };
   model.pricing.input = { value: 0.25, source, updatedAt: now, note: "Test fixture only." };
-  model.capabilities.text = { value: true, source, updatedAt: now, note: "Test fixture only." };
-  model.benchmarks = [{ id: "e2e-benchmark", name: "E2E fixture benchmark", score: "1/1 (test only)", date: now.slice(0, 10), source }];
-  model.releases = [{ id: "e2e-release", date: now.slice(0, 10), title: "Test fixture release", description: "Temporary test fixture restored after this test.", type: "release", source }];
+  model.capabilities.text = { value: true, source, updatedAt: now };
+  model.benchmarks = [{ id: "e2e-benchmark", benchmarkId: "mmlu-pro", score: 1, display: "1% (test only)", version: null, evaluatedAt: now.slice(0, 10), conditions: "Fixture", reportedBy: "provider", source }];
+  model.releases = [{ id: "e2e-release", date: now.slice(0, 10), title: "Test fixture release", description: "Temporary fixture.", type: "release", source }];
   try {
-    await page.getByRole("button", { name: "Providers", exact: true }).click();
-    await page.getByRole("button", { name: "Add provider", exact: true }).click();
+    await page.getByRole("tab", { name: /Providers/ }).click();
+    await page.getByRole("button", { name: "Add", exact: true }).click();
     await page.getByRole("textbox", { name: "Record JSON" }).fill(JSON.stringify(provider, null, 2));
     await page.getByRole("button", { name: "Validate & apply" }).click();
     await expect(page.getByRole("dialog")).toHaveCount(0);
-    await page.getByRole("button", { name: "Model versions", exact: true }).click();
-    await page.getByRole("button", { name: "Add model", exact: true }).click();
+    await page.getByRole("tab", { name: /Models/ }).click();
+    await page.getByRole("button", { name: "Add", exact: true }).click();
     await page.getByRole("textbox", { name: "Record JSON" }).fill(JSON.stringify(model, null, 2));
     await page.getByRole("button", { name: "Validate & apply" }).click();
     await expect(page.getByRole("dialog")).toHaveCount(0);
     await page.getByRole("button", { name: "Publish catalog", exact: true }).click();
-    await expect(page.getByText("The catalog is up to date.")).toBeVisible();
-    await page.goto(`/models/${model.slug}`);
-    await expect(page.getByRole("heading", { level: 1 })).toHaveText(model.name);
-    await expect(page.getByRole("cell", { name: "E2E fixture benchmark", exact: true })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Test fixture release" })).toBeVisible();
-    await expect(page.getByText("1/1 (test only)", { exact: true })).toBeVisible();
-    const sitemap = await page.request.get("/sitemap.xml");
-    expect(await sitemap.text()).toContain(`/models/${model.slug}`);
-    await page.goto(`/companies/${provider.slug}`);
-    await expect(page.getByRole("heading", { level: 1 })).toHaveText(provider.name);
-    await expect(page.getByTestId("model-card")).toHaveCount(1);
+    await expect(page.getByText("Draft matches the published catalog.")).toBeVisible();
+    await page.goto(modelPath(provider.slug, model.slug));
+    await expect(page.getByRole("heading", { level: 1 })).toContainText(model.name);
+    await expect(page.getByText("1% (test only)", { exact: true })).toBeVisible();
+    await expect(page.getByText("Test fixture release", { exact: false }).first()).toBeVisible();
+    expect(await (await page.request.get("/sitemaps/models.xml")).text()).toContain(modelPath(provider.slug, model.slug));
   } finally {
     const latest = await readBrowserCatalog(page);
     const restored = await browserRequest(page, "/api/admin/catalog", "PUT", { catalog: original, expectedUpdatedAt: latest.updatedAt });

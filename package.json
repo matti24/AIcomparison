@@ -11,7 +11,10 @@
     "test": "vitest run",
     "test:e2e": "playwright test",
     "db:seed": "tsx scripts/seed.ts",
-    "setup:local": "tsx scripts/setup-local.ts"
+    "setup:local": "tsx scripts/setup-local.ts",
+    "data:check": "tsx scripts/check-provider-file.ts --all",
+    "deploy:check": "tsx scripts/check-deployment.ts",
+    "build:vercel": "npm run deploy:check && next build"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4",
@@ -23,6 +26,7 @@
     "radix-ui": "^1.6.7",
     "react": "19.2.8",
     "react-dom": "19.2.8",
+    "recharts": "^3.10.1",
     "server-only": "^0.0.1",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.3.1",
@@ -40,5 +44,8 @@
     "tsx": "^4.20.5",
     "typescript": "^5",
     "vitest": "^5.0.2"
+  },
+  "engines": {
+    "node": "24.x"
   }
 }

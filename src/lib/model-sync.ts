@@ -125,6 +125,8 @@ export interface PriceChange {
 export interface SyncPlan {
   added: AIModel[];
   priceChanges: PriceChange[];
+  /** Auto-imported models moved up to their provider's flagship position. */
+  promoted: string[];
   skipped: number;
   catalog: Catalog;
 }
@@ -445,7 +447,7 @@ export function planModelSync(catalog: Catalog, sources: ModelSources, options: 
       ...built,
       editorial: {
         ...built.editorial,
-        rationale: "Added automatically by the daily model sync from public model listings. Facts cite those listings until editorially reviewed.",
+        rationale: AUTO_RATIONALE,
         updatedAt: nowIso,
       },
       addedAt: nowIso,
@@ -460,7 +462,16 @@ export function planModelSync(catalog: Catalog, sources: ModelSources, options: 
     added.push(valid.data);
   }
 
-  if (!added.length && !priceChanges.length) return { added, priceChanges, skipped, catalog };
+  const merged = [...catalog.models.map((model) => updated.get(model.id) ?? model), ...added];
+  const { models, promoted, trendChanges } = refreshAutoImports(merged, options.now);
+
+  if (!added.length && !priceChanges.length && !promoted.length && !trendChanges) {
+    return { added, priceChanges, promoted, skipped, catalog };
+  }
+  if (!added.length && !priceChanges.length) {
+    const next = catalogSchema.parse({ ...catalog, models, updatedBy: SYNC_EDITOR });
+    return { added, priceChanges, promoted, skipped, catalog: next };
+  }
 
   const summary = [
     added.length ? `Added ${added.map((model) => model.name).join(", ")}.` : "",
@@ -480,11 +491,98 @@ export function planModelSync(catalog: Catalog, sources: ModelSources, options: 
 
   const next = catalogSchema.parse({
     ...catalog,
-    models: [...catalog.models.map((model) => updated.get(model.id) ?? model), ...added],
+    models,
     changelog: [entry, ...catalog.changelog],
     updatedBy: SYNC_EDITOR,
   });
-  return { added, priceChanges, skipped, catalog: next };
+  return { added, priceChanges, promoted, skipped, catalog: next };
+}
+
+const TREND_DAYS = 21;
+const AUTO_RATIONALE = "Added automatically by the daily model sync from public model listings. Facts cite those listings until editorially reviewed.";
+const TIER_WORDS = ["mini", "lite", "nano", "small", "flash", "flashx", "haiku", "tiny", "micro", "air", "highspeed", "turbo"];
+const words = (name: string) => name.toLowerCase().split(/[\s\-_/]+/).filter(Boolean);
+const tierWords = (name: string) => words(name).filter((word) => TIER_WORDS.includes(word));
+const versionOf = (name: string) => {
+  const match = name.match(/(\d+(?:\.\d+)?)/);
+  return match ? Number(match[1]) : null;
+};
+const isAutoImported = (model: AIModel) => model.tags.includes(AUTO_TAG);
+const isLiveText = (model: AIModel) =>
+  (model.status === "active" || model.status === "preview") &&
+  model.categories.some((category) => category === "general" || category === "reasoning" || category === "coding");
+
+/**
+ * Keeps auto-imported models visible without manual curation:
+ * - Trending: a cited recent launch trends for TREND_DAYS, then stops automatically.
+ * - Promotion: a newer generation of a provider's flagship line (same name line,
+ *   higher version than every curated model in that line, same tier, comparable
+ *   price) moves just above that provider's curated flagship in the featured order.
+ */
+function refreshAutoImports(models: AIModel[], now: Date) {
+  const today = now.toISOString().slice(0, 10);
+  const trendFrom = new Date(now.getTime() - TREND_DAYS * DAY).toISOString().slice(0, 10);
+  let trendChanges = 0;
+
+  let next = models.map((model) => {
+    if (!isAutoImported(model)) return model;
+    const released = model.releaseDate.value;
+    const source = model.releaseDate.source;
+    const trending = Boolean(released && source && released >= trendFrom && released <= today &&
+      (model.status === "active" || model.status === "preview"));
+    if (trending === model.editorial.trending) return model;
+    trendChanges += 1;
+    return {
+      ...model,
+      editorial: {
+        ...model.editorial,
+        trending,
+        trendSource: trending ? source : null,
+        rationale: trending ? `Released ${released}; a recent launch listed in the ${source!.label}.` : AUTO_RATIONALE,
+      },
+    };
+  });
+
+  const sortKey = new Map<string, number>();
+  const promoted: string[] = [];
+  for (const providerId of new Set(next.map((model) => model.providerId))) {
+    const curated = next.filter((model) => model.providerId === providerId && isLiveText(model) && !isAutoImported(model));
+    const flagship = [...curated].sort((a, b) => a.editorial.rank - b.editorial.rank)[0];
+    if (!flagship) continue;
+    const line = words(flagship.name)[0];
+    const sameLine = curated.filter((model) => words(model.name)[0] === line);
+    const newestCurated = Math.max(...sameLine.map((model) => versionOf(model.name) ?? 0));
+    const flagshipTiers = tierWords(flagship.name);
+    const flagshipOutput = flagship.pricing.output.value;
+
+    const candidates = next
+      .filter((model) => {
+        if (model.providerId !== providerId || !isAutoImported(model) || !isLiveText(model)) return false;
+        if (model.editorial.rank <= flagship.editorial.rank || words(model.name)[0] !== line) return false;
+        const version = versionOf(model.name);
+        if (version === null || version <= newestCurated) return false;
+        if (!tierWords(model.name).every((word) => flagshipTiers.includes(word))) return false;
+        const output = model.pricing.output.value;
+        return flagshipOutput === null || output === null || output >= flagshipOutput * 0.5;
+      })
+      .sort((a, b) => (b.releaseDate.value ?? "").localeCompare(a.releaseDate.value ?? "") || a.name.localeCompare(b.name));
+    candidates.forEach((model, index) => {
+      sortKey.set(model.id, flagship.editorial.rank - 0.5 + index / 1000);
+      promoted.push(model.id);
+    });
+  }
+
+  if (promoted.length) {
+    const order = next
+      .map((model, index) => ({ model, index, key: sortKey.get(model.id) ?? model.editorial.rank }))
+      .sort((a, b) => a.key - b.key || a.index - b.index);
+    const rankOf = new Map(order.map((entry, position) => [entry.model.id, position + 1]));
+    next = next.map((model) => {
+      const rank = rankOf.get(model.id)!;
+      return rank === model.editorial.rank ? model : { ...model, editorial: { ...model.editorial, rank } };
+    });
+  }
+  return { models: next, promoted, trendChanges };
 }
 
 export async function fetchModelSources(fetcher: typeof fetch = fetch): Promise<ModelSources> {

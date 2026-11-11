@@ -39,9 +39,10 @@ export async function GET(request: Request) {
         dryRun,
         added: plan.added.map((model) => ({ id: model.id, name: model.name, provider: model.providerId, released: model.releaseDate.value })),
         priceChanges: plan.priceChanges,
+        promoted: plan.promoted,
         skipped: plan.skipped,
       };
-      if (dryRun || (!plan.added.length && !plan.priceChanges.length)) return jsonResponse(report);
+      if (dryRun || plan.catalog === current) return jsonResponse(report);
       try {
         await saveCatalog(plan.catalog, current.updatedAt);
       } catch (error) {
@@ -50,7 +51,7 @@ export async function GET(request: Request) {
         throw error;
       }
       revalidatePath("/", "layout");
-      console.info(`Model sync: added ${plan.added.length}, price changes ${plan.priceChanges.length}.`);
+      console.info(`Model sync: added ${plan.added.length}, price changes ${plan.priceChanges.length}, promoted ${plan.promoted.length}.`);
       return jsonResponse(report);
     }
   } catch (error) {

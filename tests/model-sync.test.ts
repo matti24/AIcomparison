@@ -94,7 +94,7 @@ describe("model sync planning", () => {
     expect(opus.pricing.input.value).toBe(3);
     expect(opus.releases[0]).toMatchObject({ type: "pricing", date: "2026-11-11" });
     const original = seedCatalog.models.find((model) => model.id === "claude-opus-5-5")!;
-    expect({ ...opus, pricing: original.pricing, releases: original.releases, updatedAt: original.updatedAt, updatedBy: undefined })
+    expect({ ...opus, pricing: original.pricing, releases: original.releases, editorial: original.editorial, updatedAt: original.updatedAt, updatedBy: undefined })
       .toEqual({ ...original, updatedBy: undefined });
 
     const disagreeing = sources();
@@ -117,5 +117,38 @@ describe("model sync planning", () => {
   it("ignores releases outside the window or in the future", () => {
     const plan = planModelSync(seedCatalog, sources(), { now: new Date("2026-11-09T00:00:00Z"), windowDays: 30 });
     expect(plan.added.map((model) => model.id)).toEqual(["claude-fable-9-2"]);
+  });
+
+  it("promotes a newer flagship generation above the provider's curated flagship, but not smaller tiers", () => {
+    const input = sources();
+    input.openRouter.push(orModel("anthropic/claude-haiku-9", "Anthropic: Claude Haiku 9", "2026-11-09"));
+    const plan = planModelSync(seedCatalog, input, { now });
+    expect(plan.promoted.sort()).toEqual(["claude-fable-9-2", "gemini-9-carbon-preview"]);
+    const rank = (id: string) => plan.catalog.models.find((model) => model.id === id)!.editorial.rank;
+    const flagship = (providerId: string) => seedCatalog.models
+      .filter((model) => model.providerId === providerId && model.status === "active" && model.categories.some((c) => ["general", "reasoning", "coding"].includes(c)))
+      .sort((a, b) => a.editorial.rank - b.editorial.rank)[0].id;
+    expect(rank("gemini-9-carbon-preview")).toBe(rank(flagship("google")) - 1);
+    expect(rank("claude-fable-9-2")).toBe(rank(flagship("anthropic")) - 1);
+    expect(rank("claude-haiku-9")).toBeGreaterThan(seedCatalog.models.length);
+    expect(new Set(plan.catalog.models.map((model) => model.editorial.rank)).size).toBe(plan.catalog.models.length);
+
+    const again = planModelSync(plan.catalog, input, { now });
+    expect(again.promoted).toEqual([]);
+    expect(again.catalog).toBe(plan.catalog);
+  });
+
+  it("marks fresh imports as trending with a cited source and stops trending automatically", () => {
+    const plan = planModelSync(seedCatalog, sources(), { now });
+    const fable = plan.catalog.models.find((model) => model.id === "claude-fable-9-2")!;
+    expect(fable.editorial).toMatchObject({ trending: true, trendSource: { label: "models.dev open model database" } });
+    expect(fable.editorial.rationale).toContain("Released 2026-11-08");
+    const curatedTrending = seedCatalog.models.filter((model) => model.editorial.trending).map((model) => model.id);
+
+    const later = planModelSync(plan.catalog, sources(), { now: new Date("2026-12-15T06:00:00Z") });
+    const stale = later.catalog.models.find((model) => model.id === "claude-fable-9-2")!;
+    expect(stale.editorial).toMatchObject({ trending: false, trendSource: null });
+    expect(later.catalog.models.filter((model) => model.editorial.trending).map((model) => model.id)).toEqual(curatedTrending);
+    expect(() => catalogSchema.parse(later.catalog)).not.toThrow();
   });
 });

@@ -27,7 +27,8 @@ async function main() {
   for (const change of plan.priceChanges) {
     console.info(`$ ${change.modelId}: input ${change.input[0] ?? "-"} -> ${change.input[1]}, output ${change.output[0] ?? "-"} -> ${change.output[1]}`);
   }
-  console.info(`${plan.added.length} new, ${plan.priceChanges.length} price changes, ${plan.skipped} skipped.`);
+  for (const id of plan.promoted) console.info(`^ ${id} moves up to its provider's flagship position`);
+  console.info(`${plan.added.length} new, ${plan.promoted.length} promoted, ${plan.priceChanges.length} price changes, ${plan.skipped} skipped.`);
 }
 
 void main().catch((error: unknown) => {

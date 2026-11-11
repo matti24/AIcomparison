@@ -25,6 +25,12 @@ async function main() {
   });
 
   const { data, error } = await supabase.rpc("get_catalog");
+  if (error && !error.code) {
+    // Network-level failure (e.g. a paused Free-tier project). Public pages fall back to the
+    // bundled seed catalog, so the deploy can proceed; admin writes stay unavailable until restored.
+    console.warn("WARNING: The production database is unreachable. Deploying anyway; public pages will serve the bundled seed catalog until the database is back.");
+    return;
+  }
   if (error || data === null) {
     throw new DeploymentCheckError("The production catalog is unavailable. Apply supabase/schema.sql and run npm run db:seed before deploying.");
   }

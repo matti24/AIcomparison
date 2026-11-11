@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getCatalog } from "@/lib/catalog-store";
+import { getPublicCatalog } from "@/lib/catalog-store";
 import { recordEvent } from "@/lib/event-store";
 
 export const runtime = "nodejs";
@@ -26,7 +26,7 @@ function withUtm(target: string, campaign: string | null) {
 export async function GET(request: Request, { params }: RouteContext<"/go/[kind]/[id]">) {
   const { kind, id } = await params;
   const dest = new URL(request.url).searchParams.get("dest");
-  const catalog = await getCatalog();
+  const catalog = await getPublicCatalog();
   let target: string | null = null;
   let campaign: string | null = null;
   let affiliate = false;

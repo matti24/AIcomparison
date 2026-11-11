@@ -224,7 +224,9 @@ function nextUpdatedAt(previous: string) {
 
 export async function getCatalog(): Promise<Catalog> {
   if (getStorageMode() === "supabase") {
-    const { data, error } = await supabase().rpc("get_catalog");
+    const { data, error } = await supabase()
+      .rpc("get_catalog")
+      .then((result) => result, () => ({ data: null, error: { code: undefined } }));
     if (error) throw rpcError("read", error.code);
     if (data === null) {
       throw new CatalogStorageError(
@@ -247,6 +249,21 @@ export async function getCatalog(): Promise<Catalog> {
     if (!initialized) throw new CatalogStorageError("Local catalog initialization did not persist.");
     return initialized;
   });
+}
+
+/**
+ * Read path for public pages. If remote storage is unreachable (e.g. a paused
+ * Supabase project), serve the bundled seed so visitors never see an outage.
+ * Admin reads and all writes keep using the strict getCatalog/saveCatalog.
+ */
+export async function getPublicCatalog(): Promise<Catalog> {
+  try {
+    return await getCatalog();
+  } catch (error) {
+    if (!(error instanceof CatalogStorageError) || getStorageMode() !== "supabase") throw error;
+    console.warn(`[catalog] ${error.message} Serving the bundled seed catalog instead.`);
+    return catalogSchema.parse(seedCatalog);
+  }
 }
 
 export async function saveCatalog(

@@ -14,6 +14,7 @@ import {
   CatalogStorageError,
   ConflictError,
   getCatalog,
+  getPublicCatalog,
   getStorageMode,
   saveCatalog,
 } from "../src/lib/catalog-store";
@@ -325,6 +326,18 @@ describe("Supabase adapter contract (mock HTTP, not a hosted database test)", ()
     expect(error).toBeInstanceOf(CatalogStorageError);
     expect(String(error)).toContain("42883");
     expect(String(error)).not.toMatch(/secret|Private diagnostic|test-service-role-key/);
+    expect(await readdir(directory)).toEqual([]);
+  });
+
+  it("serves the bundled seed to public readers when Supabase is unreachable, but keeps admin strict", async () => {
+    configure();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("fetch failed: ENOTFOUND")));
+    await expect(getCatalog()).rejects.toBeInstanceOf(CatalogStorageError);
+    expect(await getPublicCatalog()).toEqual(seedCatalog);
+    await expect(saveCatalog(seedCatalog, seedCatalog.updatedAt)).rejects.toBeInstanceOf(CatalogStorageError);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({ unexpected: true })));
+    await expect(getPublicCatalog()).rejects.toBeInstanceOf(ZodError);
     expect(await readdir(directory)).toEqual([]);
   });
 });

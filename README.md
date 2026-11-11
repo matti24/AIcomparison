@@ -125,7 +125,22 @@ The app reads/writes a validated snapshot through `get_catalog()` / `save_catalo
 
 All catalog deletions are scoped to snapshot model IDs or records omitted from the submitted catalog, so publishing works with Supabase REST's `pg_safeupdate` protection enabled. Do not disable that protection to work around an outdated schema; reapply the current schema instead.
 
-Ingestion: automated synchronizers (official APIs, documentation, provider feeds) should produce provider files or catalog drafts that go through the same validation and admin review before publishing.
+Ingestion: automated synchronizers (official APIs, documentation, provider feeds) produce catalog changes that go through the same schema validation and optimistic-concurrency save as admin publishing.
+
+### Automatic model sync
+
+New releases are added without manual work. A [Vercel Cron job](vercel.json) calls `/api/cron/sync-models` daily at 06:00 UTC. The job:
+
+- reads the public [OpenRouter model list](https://openrouter.ai/api/v1/models) and the [models.dev](https://models.dev/api.json) database (no API keys needed);
+- adds models released in the last 30 days by providers already in the catalog (max 25 per run). Every imported fact cites its listing, missing facts stay "unknown", and entries are tagged `Auto-imported` with `updatedBy: model-sync`;
+- updates an existing model's price only when both listings agree, adding a dated `pricing` event;
+- never rewrites curated descriptions or benchmarks, never invents providers, and skips models that a provider only hosts for another lab;
+- writes a changelog entry and saves through `save_catalog()`. Pages render per request, so changes appear immediately without a redeploy;
+- keeps a Free-tier Supabase project from pausing, because it touches the database daily.
+
+Setup: set `CRON_SECRET` (16+ random characters) in the Vercel project. Vercel sends it as `Authorization: Bearer …`, and requests without it get `401`. Run the job by hand with `curl -H "Authorization: Bearer $CRON_SECRET" https://your-domain/api/cron/sync-models`, or add `?dryRun=1` to preview. Locally, `npm run models:preview` prints the planned changes without writing. Review auto-imported models in `/admin` whenever you like; edits there are kept.
+
+If the database is unreachable (for example a paused Supabase project), public pages serve the bundled reference catalog instead of failing. Admin publishing and the sync stay unavailable until the database is back.
 
 ### Deploying the full application to Vercel
 

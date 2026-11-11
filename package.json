@@ -14,6 +14,7 @@
     "setup:local": "tsx scripts/setup-local.ts",
     "data:check": "tsx scripts/check-provider-file.ts --all",
     "deploy:check": "tsx scripts/check-deployment.ts",
+    "models:preview": "tsx scripts/preview-model-sync.ts",
     "build:vercel": "npm run deploy:check && next build"
   },
   "dependencies": {
